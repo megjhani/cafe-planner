@@ -440,7 +440,7 @@ function render(r){
       <div class="track" style="height:${H}px">
       ${c<T1?`<div class="closed" style="left:${pct(c)};right:0"></div>`:''}
       ${extras}
-      ${list.map(s=>`<div class="bar${s.who===OWNER?' sh':''}${s.k===SEL?' sel':''}" data-k="${s.k}" style="left:${pct(s.s)};width:calc(${pct(s.e)} - ${pct(s.s)} - 2px);top:${6+s.lane*30}px" title="${s.who} ${fmt(s.s)}–${fmt(s.e)} · drag to move, drag edges to resize, click to edit"><i class="hl"></i><b>${s.who}</b><span>${fmt(s.s)}–${fmt(s.e)}</span><i class="hr"></i></div>`).join('')}
+      ${list.map(s=>`<div class="bar${s.who===OWNER?' sh':''}${s.k===SEL?' sel':''}" data-k="${s.k}" style="left:${pct(s.s)};width:calc(${pct(s.e)} - ${pct(s.s)} - 2px);top:${6+s.lane*30}px" title="${s.who} ${fmt(s.s)}–${fmt(s.e)}${s.locked?' (locked hours)':''} · drag to move, drag edges to resize, click to edit"><i class="hl"></i><b>${s.who}${s.locked?' 🔒':''}</b><span>${fmt(s.s)}–${fmt(s.e)}</span><i class="hr"></i></div>`).join('')}
       ${r.gaps.filter(g=>g.d===d).map(g=>`<div class="gapmark" style="left:${pct(g.s)};width:calc(${pct(g.e)} - ${pct(g.s)})"></div>`).join('')}
       </div></div>`;
   });
@@ -482,6 +482,19 @@ function build2(){
     const budget=Math.max(0,S.cap-total-reserve);
     const cov={};for(let h=o;h<c;h++)cov[h]=0;
     let best={cost:Infinity},cur=[],used=new Set(),spent=0,shUsed=false,nodes=0;
+    // locked "yes" cells are the owner's call: give that person those hours first,
+    // stretched toward their longest shift through neighbouring hours they're free
+    const pre=[],partRange=[[o,12],[12,16],[16,c]];
+    S.team.forEach((e,i)=>{
+      const P=[0,1,2].filter(p=>e.lock&&e.lock[d][p]&&e.avail[d][p]);if(!P.length)return;
+      const ws=partRange[P[0]][0],we=partRange[P[P.length-1]][1];
+      const free=t=>t>=o&&t<c&&e.avail[d][part(t)];
+      let s,en;
+      if(P.includes(2)){en=we;s=Math.max(ws,en-e.hi);while(en-s<e.hi&&free(s-1))s--}
+      else{s=ws;en=Math.min(we,s+e.hi);while(en-s<e.hi&&free(en))en++}
+      pre.push({who:e.name,idx:i,s,e:en,locked:true});
+      for(let t=s;t<en;t++)cov[t]++;used.add(i);spent+=en-s;
+    });
     function dfs(cost){
       if(cost>=best.cost||++nodes>200000)return;
       let h=o;while(h<c&&cov[h]>=need[d][h])h++;
@@ -512,9 +525,9 @@ function build2(){
       cov[h]++;cur.push({gap:h});dfs(cost+(h===c-1?10000:need[d][h]===2?60:100));cur.pop();cov[h]--;
     }
     dfs(0);
-    best.list.forEach(x=>{
+    pre.concat(best.list).forEach(x=>{
       if(x.gap!==undefined){gapHours.push({d,h:x.gap});return}
-      shifts.push({d,s:x.s,e:x.e,who:x.who,idx:x.idx});
+      shifts.push({d,s:x.s,e:x.e,who:x.who,idx:x.idx,locked:!!x.locked});
       if(x.idx>=0){hrs[x.idx]+=x.e-x.s;nd[x.idx]++;total+=x.e-x.s}});
   });
   const gaps=[];
