@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Cafe Shift Planner</title>
+<script>
+// ---- Live setup: paste your Firebase web config here (see SETUP.md). ----
+// Leave apiKey empty and the planner runs offline, saving only in this browser.
+window.FIREBASE_CONFIG = {
+  apiKey: "AIzaSyB5xPVbwzVf80S6wEUAZ7FsfmtJIJWjSys",
+  authDomain: "cafe-planner-e0803.firebaseapp.com",
+  projectId: "cafe-planner-e0803",
+  appId: "1:371628101359:web:2ccdf1bd2bfdb16991151a"
+};
+window.OWNER_EMAIL = "megjhani@gmail.com"; // the Google account that runs the planner
+window.LIVE = !!window.FIREBASE_CONFIG.apiKey;
+</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: setup column (week, team, owner) beside a wide schedule board; stacks on phones */
+:root{
+  --bg:#f3f5f4; --panel:#ffffff; --fg:#1d2624; --muted:#5f6d69; --line:#d9e0dd;
+  --accent:#1f6f5c; --accent-soft:#d6ebe4; --owner:#b5651d; --owner-soft:#f6e3cf;
+  --extra:#6b4fa0; --warn:#b3261e; --warn-soft:#fbe1de;
+  --display:"Bricolage Grotesque",system-ui,sans-serif; --body:"Figtree",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#121816; --panel:#1a2220; --fg:#e4ebe8; --muted:#97a6a1; --line:#2c3835;
+  --accent:#5cc4a6; --accent-soft:#1d3a32; --owner:#e9a35f; --owner-soft:#3d2c1b;
+  --extra:#b49be0; --warn:#f2867c; --warn-soft:#3f1d1a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121816; --panel:#1a2220; --fg:#e4ebe8; --muted:#97a6a1; --line:#2c3835;
+  --accent:#5cc4a6; --accent-soft:#1d3a32; --owner:#e9a35f; --owner-soft:#3d2c1b;
+  --extra:#b49be0; --warn:#f2867c; --warn-soft:#3f1d1a; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45}
+[hidden]{display:none!important}
+.wrap{max-width:1280px;margin:0 auto;padding-block:24px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:20px}
+header{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px}
+h1{font-family:var(--display);font-size:2rem;margin:0;letter-spacing:-.01em}
+h2{font-family:var(--display);font-size:1.1rem;margin:0}
+.sub{color:var(--muted);margin:2px 0 0}
+.grid{display:grid;grid-template-columns:minmax(0,400px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:900px){.grid{grid-template-columns:minmax(0,1fr)}}
+.col{display:grid;gap:16px;min-width:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px;min-width:0}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+label.small{font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+input[type=text],input[type=number],select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+input[type=number]{width:70px;font-family:var(--mono)}
+button{font:inherit;cursor:pointer;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--fg);padding:7px 12px}
+button.primary{background:var(--accent);color:var(--panel);border-color:var(--accent);font-weight:600}
+button:focus-visible,input:focus-visible,select:focus-visible,.chip:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+.chip{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:.82rem;cursor:pointer;user-select:none}
+.chip input{position:absolute;opacity:0;pointer-events:none}
+.chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--fg);font-weight:600}
+.chip.off.on{background:var(--warn-soft);border-color:var(--warn)}
+.chip.lk{border-style:dashed;border-width:2px}
+.chip.lk::after{content:"🔒";font-size:.7rem;margin-left:3px}
+.chip.lk.ro{cursor:not-allowed;opacity:.75}
+.lockon .chip{box-shadow:0 0 0 2px var(--owner-soft)}
+.inv{width:100%;box-sizing:border-box;font-family:var(--mono);font-size:.72rem}
+.emp{border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px}
+.emp:first-of-type{border-top:0;padding-top:0}
+.emp .name{flex:1;min-width:120px}
+.x{border:0;background:none;color:var(--muted);font-size:1.1rem;padding:2px 6px}
+table{border-collapse:collapse;width:100%;font-size:.85rem}
+th,td{padding:5px 6px;text-align:left;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:500;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.scroll{overflow-x:auto}
+.board{min-width:640px;display:grid;gap:6px}
+.trow{display:grid;grid-template-columns:52px 1fr;gap:8px;align-items:stretch}
+.dlabel{font-family:var(--display);font-weight:700;padding-top:4px}
+.dlabel small{display:block;font-family:var(--mono);font-weight:400;font-size:.68rem;color:var(--muted)}
+.track{position:relative;background:var(--bg);border:1px solid var(--line);border-radius:6px;min-height:40px}
+.closed{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(45deg,transparent 0 5px,var(--line) 5px 6px)}
+.bar{position:absolute;height:26px;border-radius:5px;padding:0 6px;font-size:.75rem;display:flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap;background:var(--accent-soft);border-left:3px solid var(--accent)}
+.bar.sh{background:var(--owner-soft);border-left-color:var(--owner)}
+.bar{cursor:grab;touch-action:none;user-select:none}
+.bar.drag{cursor:grabbing;opacity:.85;z-index:5}
+.bar.sel{outline:2px solid var(--fg);outline-offset:1px}
+.bar .hl,.bar .hr{position:absolute;top:0;bottom:0;width:8px;cursor:ew-resize}
+.bar .hl{left:-3px}.bar .hr{right:0}
+.bar .hr::after{content:"";position:absolute;right:2px;top:7px;bottom:7px;width:2px;border-radius:1px;background:var(--muted);opacity:.5}
+.editor{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.bar b{font-weight:600}
+.bar span{font-family:var(--mono);color:var(--muted)}
+.gapmark{position:absolute;bottom:0;height:4px;background:var(--warn)}
+.extramark{position:absolute;top:0;height:3px;background:var(--extra)}
+.axis{display:grid;grid-template-columns:52px 1fr;gap:8px}
+.ticks{position:relative;height:16px;font-family:var(--mono);font-size:.68rem;color:var(--muted)}
+.ticks i{position:absolute;transform:translateX(-50%);font-style:normal}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:.8rem;color:var(--muted)}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:5px}
+.stats{display:flex;flex-wrap:wrap;gap:24px}
+.stat .v{font-family:var(--display);font-size:1.6rem;font-weight:700}
+.stat .v.bad{color:var(--warn)}
+.stat .l{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.warn{background:var(--warn-soft);border:1px solid var(--warn);border-radius:8px;padding:10px 12px;font-size:.88rem}
+.warn ul{margin:4px 0 0;padding-left:18px}
+.ok{color:var(--accent);font-weight:600}
+.note{font-size:.8rem;color:var(--muted)}
+textarea{width:100%;box-sizing:border-box;font-family:var(--mono);font-size:.78rem;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px;min-height:120px}
+.ownergrid td,.ownergrid th{text-align:center}
+.ownergrid td:first-child,.ownergrid th:first-child{text-align:left}
+input[type=email]{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;flex:1;min-width:160px}
+.gate{max-width:440px;margin:12vh auto 0;text-align:center;justify-items:center}
+pre.sched{margin:0;font-family:var(--mono);font-size:.82rem;white-space:pre-wrap}
+.saved{color:var(--accent);font-weight:600}
+</style>
+</head>
+<body>
+
+<div class="wrap gate" id="gate" hidden>
+  <h1>Cafe Shift Planner</h1>
+  <p class="sub" id="gateSub">Sign in with the Google account your manager has on the team list.</p>
+  <button class="primary" id="signin">Sign in with Google</button>
+  <p class="note" id="gateMsg">Loading…</p>
+  <button class="signout" hidden>Use a different account</button>
+</div>
+
+<div class="wrap" id="empApp" hidden>
+  <header>
+    <div>
+      <h1 id="empHi">Your availability</h1>
+      <p class="sub" id="empSub"></p>
+    </div>
+    <div class="row live" hidden><span class="note who"></span><button class="signout">Sign out</button></div>
+  </header>
+  <section class="panel">
+    <h2>When can you work?</h2>
+    <p class="note">Tap a box to switch between yes and –. Boxes marked 🔒 were set by your manager and can't be changed. Morning = opening–12, Mid = 12–4 pm, Evening = 4 pm–close.</p>
+    <div class="scroll"><table class="ownergrid" id="empGrid"></table></div>
+  </section>
+  <section class="panel live" hidden>
+    <p class="note" id="empLiveMsg">Changes save as you tap. Your manager sees them right away.</p>
+  </section>
+  <section class="panel" id="empSchedWrap" hidden>
+    <h2>This week's schedule</h2>
+    <pre class="sched" id="empSched"></pre>
+  </section>
+  <section class="panel offline">
+    <h2>Send it back</h2>
+    <p class="note">When you're done, copy this code and text it to your manager.</p>
+    <textarea id="empCode" readonly aria-label="Your reply code"></textarea>
+    <div class="row"><button class="primary" id="empCopy">Copy my code</button><span class="note" id="empMsg"></span></div>
+  </section>
+</div>
+
+<div class="wrap" id="ownerApp">
+  <header>
+    <div>
+      <h1>Cafe Shift Planner</h1>
+      <p class="sub">Mark preferences, press Build. Sample team loaded — rename or replace with your staff.</p>
+    </div>
+    <div class="row">
+      <span class="note who live" hidden></span><button class="signout live" hidden>Sign out</button>
+      <button id="reset">Reset to sample</button>
+      <button class="primary" id="build">Build schedule</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="col">
+      <section class="panel">
+        <h2>This week</h2>
+        <div class="row">
+          <label class="small" for="cap">Staff hours cap</label>
+          <input type="number" id="cap" min="0" max="120">
+          <span class="note">hrs/week (Sch not counted)</span>
+        </div>
+        <div class="row">
+          <label class="small" for="wk">Week starting (Mon)</label>
+          <input type="date" id="wk">
+        </div>
+        <label class="small">Shows &amp; busy times</label>
+        <div class="scroll"><table class="ownergrid" id="comedy"></table></div>
+        <p class="note">Show = comedy start; 2 people from 1 h before to 1 h after (7 pm show → 6–8 pm). Busy = extra 2-person window (e.g. Sat 11 am–1 pm). Closing hour must always be staffed.</p>
+      </section>
+
+      <section class="panel">
+        <div class="row" style="justify-content:space-between"><h2>Team &amp; preferences</h2><button id="add">+ Add</button></div>
+        <div id="team"></div>
+        <div class="emp offline">
+          <label class="small" for="imp">Paste reply codes from your team</label>
+          <textarea id="imp" placeholder="r.eyJ... (one or more codes)"></textarea>
+          <div class="row"><button class="primary" id="impApply">Apply replies</button><span class="note" id="impMsg"></span></div>
+        </div>
+        <p class="note">Min/max = shortest and longest shift that person can get (e.g. Masha 4–6, Carmen 4–7). Grid = when they're happy to work (Morning open–12, Mid 12–4 pm, Evening 4 pm–close); a shift is only given inside their "yes" blocks. Max days caps shifts per week.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Sch (owner) — can't work</h2>
+        <div class="scroll"><table class="ownergrid" id="owner"></table></div>
+        <p class="note">Morning = open–12, Afternoon = 12–4 pm, Evening = 4 pm–close. Red = unavailable.</p>
+        <div class="row live" hidden>
+          <input type="email" id="schEmail" placeholder="Sch's Google email" aria-label="Sch's Google email">
+          <span class="note" id="schMsg"></span>
+        </div>
+        <p class="note live" hidden>Sch gets full admin access: signing in with this email opens this whole planner, same as you.</p>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="panel">
+        <div class="stats" id="stats"></div>
+        <div id="warnings"></div>
+      </section>
+      <section class="panel">
+        <div class="legend">
+          <span><i style="background:var(--accent-soft);border-left:3px solid var(--accent)"></i>Staff</span>
+          <span><i style="background:var(--owner-soft);border-left:3px solid var(--owner)"></i>Sch</span>
+          <span><i style="background:var(--extra)"></i>2-person window</span>
+          <span><i style="background:var(--warn)"></i>Uncovered</span>
+        </div>
+        <div class="scroll"><div class="board" id="board"></div></div>
+        <p class="note">Drag a bar to move it, drag its edges to shorten or lengthen (30-min steps), click it to change person or remove. Edits are kept until you press Build schedule again.</p>
+        <div class="editor">
+          <label class="small" for="eWho">Shift</label>
+          <select id="eWho" aria-label="Person"></select>
+          <select id="eDay" aria-label="Day"></select>
+          <select id="eS" aria-label="Start"></select>
+          <select id="eE" aria-label="End"></select>
+          <button id="eSave">Update</button>
+          <button id="eAdd">Add as new</button>
+          <button id="eDel">Remove</button>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Hours per person</h2>
+        <div class="scroll"><table id="totals"></table></div>
+      </section>
+      <section class="panel">
+        <div class="row" style="justify-content:space-between"><h2>Text to send staff</h2><div class="row"><button id="pub" class="live" hidden>Share with team</button><button id="copy">Copy</button></div></div>
+        <textarea id="txt" readonly></textarea>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+const OWNER='Sch';
+const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const OPEN=[[8,20],[8,20],[8,20],[8,22],[8,22],[8,22],[8,22]];
+const PARTS=['Morning','Mid','Evening'];
+const part=h=>h<12?0:h<16?1:2;
+const fmt=h=>{const a=Math.floor(h)%24,m=Math.round((h-Math.floor(h))*60),s=a>=12?'pm':'am',v=a%12||12;return v+(m?':'+String(m).padStart(2,'0'):'')+s};
+const T0=8,T1=22; // board axis
+let R=null,SEL=-1; // current schedule (editable) and selected shift index
+const KEY='cafe-rota-v5';
+const mondayOf=dt=>{const x=new Date(dt);x.setDate(x.getDate()-((x.getDay()+6)%7));
+  return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0')};
+
+// avail[day][part]: 1 = happy to work that part of that day
+const mk=(days,parts)=>DAYS.map((_,d)=>[0,1,2].map(p=>days.includes(d)&&parts.includes(p)?1:0));
+const SAMPLE=()=>({
+  cap:62,
+  comedy:[0,0,0,0,18,0,0], // show start hour per day, 0 = no show
+  rush:[[0,0],[0,0],[0,0],[0,0],[0,0],[11,13],[0,0]], // extra-person window per day
+  team:[
+    {name:'Masha',lo:4,hi:6,max:5,avail:mk([1,3,4,5,6],[1,2]),lock:mk([1],[2])}, // Tue evening fixed
+    {name:'Carmen',lo:4,hi:7,max:4,avail:mk([2,4,5,6],[0,1,2])},
+    {name:'Ave',lo:4,hi:5,max:2,avail:mk([],[])}, // nothing ticked this week
+    {name:'Roxy',lo:5,hi:6,max:2,avail:mk([5,6],[0,1])},
+  ],
+  // Sch unavailable [day][part]
+  owner:[[0,0,0],[0,0,1],[1,0,0],[0,0,1],[0,0,1],[1,1,1],[1,1,1]],
+});
+
+let S;
+try{S=JSON.parse(localStorage.getItem(KEY))}catch(e){}
+if(!S||!S.team)S=SAMPLE();
+const fixEmp=e=>{if(!e.lock)e.lock=mk([],[]);if(e.email==null)e.email=''};
+S.team.forEach(fixEmp);
+const LIVE=!!window.LIVE,SYNC={}; // SYNC[email] = last time that person saved (live mode)
+const hook=(n,...a)=>{if(typeof window[n]==='function')window[n](...a)};
+const LOCKMODE=new Set(); // employees whose grid is in "lock cells" mode
+const APP_URL='https://claude.ai/artifact/EtYXM5Mf11gxjV6drP6BTD';
+// URL-safe base64 of JSON (hash tokens allow only letters, digits, - _ . ~)
+const enc=o=>btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const dec=s=>JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g,'+').replace(/_/g,'/')))));
+const bits=g=>g.flat().join('');
+const unbits=(s)=>DAYS.map((_,d)=>[0,1,2].map(p=>s[d*3+p]==='1'?1:0));
+const inviteLink=e=>APP_URL+'#p.'+enc({n:e.name,w:S.week||mondayOf(new Date()),a:bits(e.avail),l:bits(e.lock)});
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){};hook('onSave')};
+const esc=t=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+const syncNote=e=>!e.email?'Add their Google email so they can sign in.':SYNC[e.email]?'Last updated by them '+new Date(SYNC[e.email]).toLocaleString(undefined,{weekday:'short',hour:'numeric',minute:'2-digit'})+'.':"Hasn't updated yet.";
+const $=id=>document.getElementById(id);
+
+function renderSetup(){
+  $('cap').value=S.cap;
+  $('wk').value=S.week||mondayOf(new Date());
+  $('schEmail').value=S.ownerEmail||'';
+  const sel=(id,cur,hours,label)=>`<select id="${id}" aria-label="${label}"><option value="0">—</option>${hours.map(h=>`<option value="${h}"${cur==h?' selected':''}>${fmt(h)}</option>`).join('')}</select>`;
+  const rng=(a,b)=>Array.from({length:b-a+1},(_,k)=>a+k);
+  $('comedy').innerHTML=`<tr><th></th>${DAYS.map(d=>`<th>${d}</th>`).join('')}</tr>
+    <tr><td>Show</td>${DAYS.map((_,j)=>`<td>${sel('cm'+j,S.comedy[j],[17,18,19,20,21].filter(h=>h<OPEN[j][1]),DAYS[j]+' show')}</td>`).join('')}</tr>
+    <tr><td>Busy from</td>${DAYS.map((_,j)=>`<td>${sel('rs'+j,S.rush[j][0],rng(OPEN[j][0],OPEN[j][1]-1),DAYS[j]+' busy from')}</td>`).join('')}</tr>
+    <tr><td>Busy to</td>${DAYS.map((_,j)=>`<td>${sel('re'+j,S.rush[j][1],rng(OPEN[j][0]+1,OPEN[j][1]),DAYS[j]+' busy to')}</td>`).join('')}</tr>`;
+  DAYS.forEach((_,j)=>{$('cm'+j).onchange=ev=>{S.comedy[j]=+ev.target.value;save()};
+    $('rs'+j).onchange=ev=>{S.rush[j][0]=+ev.target.value;save()};
+    $('re'+j).onchange=ev=>{S.rush[j][1]=+ev.target.value;save()}});
+  const t=$('team');t.innerHTML='';
+  S.team.forEach((e,i)=>{
+    const d=document.createElement('div');d.className='emp';
+    d.innerHTML=`<div class="row">
+      <input type="text" class="name" id="n${i}" value="${e.name.replace(/"/g,'&quot;')}" aria-label="Name">
+      <select id="l${i}" aria-label="Shortest shift">${[4,5,6,7].map(v=>`<option value="${v}"${v==e.lo?' selected':''}>min ${v} h</option>`).join('')}</select>
+      <select id="h${i}" aria-label="Longest shift">${[4,5,6,7].map(v=>`<option value="${v}"${v==e.hi?' selected':''}>max ${v} h</option>`).join('')}</select>
+      <select id="m${i}" aria-label="Max days">${[1,2,3,4,5].map(v=>`<option value="${v}"${v==e.max?' selected':''}>max ${v}d</option>`).join('')}</select>
+      <button class="x" id="x${i}" aria-label="Remove ${e.name}">×</button></div>
+      ${LIVE?`<div class="row"><input type="email" id="em${i}" value="${esc(e.email)}" placeholder="Their Google email" aria-label="${esc(e.name)} Google email"></div>`:''}
+      <div class="scroll${LOCKMODE.has(i)?' lockon':''}"><table class="ownergrid"><tr><th></th>${DAYS.map(d=>`<th>${d}</th>`).join('')}</tr>${PARTS.map((p,k)=>`<tr><td>${p}</td>${DAYS.map((_,j)=>`<td><label class="chip${e.avail[j][k]?' on':''}${e.lock[j][k]?' lk':''}" title="${DAYS[j]} ${p}${e.lock[j][k]?' (locked)':''}"><input type="checkbox" id="d${i}_${j}_${k}"${e.avail[j][k]?' checked':''}>${e.avail[j][k]?'yes':'–'}</label></td>`).join('')}</tr>`).join('')}</table></div>
+      <div class="row">
+        <button id="lk${i}">${LOCKMODE.has(i)?'Done locking':'Lock cells'}</button>
+        <button id="iv${i}">${LIVE?'Copy app link':'Copy invite link'}</button>
+        <span class="note" id="ivm${i}">${LOCKMODE.has(i)?'Tap cells to lock/unlock them at their current value.':LIVE?syncNote(e):''}</span>
+      </div>`;
+    t.appendChild(d);
+    $('n'+i).oninput=ev=>{e.name=ev.target.value||'?';save();hook('onStaff',e,false)};
+    if(LIVE)$('em'+i).onchange=ev=>{const v=ev.target.value.trim().toLowerCase();if(v===e.email)return;
+      if(v&&(S.team.some(x=>x!==e&&x.email===v)||v===S.ownerEmail)){ev.target.value=e.email;$('ivm'+i).textContent='Someone else already has that email.';return}
+      hook('onStaffRemove',e.email);e.email=v;save();hook('onStaff',e,true);renderSetup()};
+    $('l'+i).onchange=ev=>{e.lo=+ev.target.value;if(e.hi<e.lo)e.hi=e.lo;save();renderSetup()};
+    $('h'+i).onchange=ev=>{e.hi=+ev.target.value;if(e.lo>e.hi)e.lo=e.hi;save();renderSetup()};
+    $('m'+i).onchange=ev=>{e.max=+ev.target.value;save()};
+    $('x'+i).onclick=()=>{hook('onStaffRemove',e.email);S.team.splice(i,1);LOCKMODE.clear();save();renderSetup()};
+    DAYS.forEach((_,j)=>PARTS.forEach((_,k)=>{$(`d${i}_${j}_${k}`).onchange=ev=>{
+      if(LOCKMODE.has(i))e.lock[j][k]^=1; // lock mode: freeze cell at its current value
+      else e.avail[j][k]=ev.target.checked?1:0;
+      save();hook('onStaff',e,true);renderSetup()}}));
+    $('lk'+i).onclick=()=>{LOCKMODE.has(i)?LOCKMODE.delete(i):LOCKMODE.add(i);renderSetup()};
+    $('iv'+i).onclick=()=>{const m=$('ivm'+i);
+      if(LIVE&&!e.email){m.textContent='Add their Google email first.';return}
+      const link=LIVE?location.href.split('#')[0]:inviteLink(e);
+      navigator.clipboard.writeText(link).then(()=>{m.textContent=LIVE?`Link copied. Send it to ${e.name}; they sign in with ${e.email}.`:`Link copied. Send it to ${e.name}.`},
+        ()=>{m.innerHTML=`<input class="inv" readonly value="${link}">`;m.querySelector('input').select()})};
+  });
+  $('owner').innerHTML=`<tr><th></th>${DAYS.map(d=>`<th>${d}</th>`).join('')}</tr>`+
+    PARTS.map((p,k)=>`<tr><td>${p}</td>${DAYS.map((_,j)=>`<td><label class="chip off${S.owner[j][k]?' on':''}" title="${DAYS[j]} ${p}"><input type="checkbox" id="o${j}_${k}"${S.owner[j][k]?' checked':''}>${S.owner[j][k]?'off':'ok'}</label></td>`).join('')}</tr>`).join('');
+  DAYS.forEach((_,j)=>PARTS.forEach((_,k)=>{$(`o${j}_${k}`).onchange=ev=>{S.owner[j][k]=ev.target.checked?1:0;save();renderSetup()}}));
+}
+
+function build(){
+  const need=[],cov=[],shifts=[];
+  DAYS.forEach((_,d)=>{
+    const [o,c]=OPEN[d];need[d]={};cov[d]={};
+    for(let h=o;h<c;h++){need[d][h]=1;cov[d][h]=0}
+    if(d===5)for(let h=11;h<13;h++)need[d][h]=2;
+    if((d===4&&S.comedyFri)||(d===5&&S.comedySat))for(let h=S.comedyStart;h<c;h++)need[d][h]=2;
+  });
+  const hrs={},days={};S.team.forEach((e,i)=>{hrs[i]=0;days[i]=new Set()});
+  let total=0;
+  const ownerOK=(d,h)=>!S.owner[d][part(h)];
+  const ownerOn=(d,h)=>shifts.some(s=>s.who===OWNER&&s.d===d&&h>=s.s&&h<s.e);
+  const add=(d,s,e,who,idx)=>{shifts.push({d,s,e,who,idx});for(let h=s;h<e;h++)cov[d][h]++};
+
+  function tryEmp(d,h){
+    const [o,c]=OPEN[d];
+    const cand=S.team.map((e,i)=>({e,i})).filter(({e,i})=>e.days[d]&&!days[i].has(d)&&days[i].size<e.max)
+      .map(x=>{let s=h,end=Math.min(h+x.e.len,c);if(end-s<x.e.len)s=Math.max(o,c-x.e.len);end=Math.min(s+x.e.len,c);return {...x,s,end,len:end-s}})
+      .filter(x=>total+x.len<=S.cap)
+      // fewest hours first, then the person with fewest open days left (scarcer)
+      .sort((a,b)=>hrs[a.i]-hrs[b.i]||a.e.days.reduce((p,v)=>p+v,0)-b.e.days.reduce((p,v)=>p+v,0));
+    if(!cand.length)return false;
+    const x=cand[0];
+    add(d,x.s,x.end,x.e.name,x.i);hrs[x.i]+=x.len;days[x.i].add(d);total+=x.len;return true;
+  }
+  // Pass 1: hours SH can't cover (weekends, blocked times, 2nd person) -> staff. Weekends first.
+  const order=[5,6,4,3,1,0,2];
+  for(const d of order){const [o,c]=OPEN[d];
+    for(let h=o;h<c;h++){
+      while(cov[d][h]<need[d][h]){
+        // SH can be the last missing person on an hour when available
+        if(ownerOK(d,h)&&!ownerOn(d,h)&&cov[d][h]===need[d][h]-1)break;
+        if(!tryEmp(d,h))break;
+      }
+    }}
+  // Pass 2: spend remaining staff budget so SH works less
+  for(const d of order){const [o,c]=OPEN[d];
+    for(let h=o;h<c;h++){if(cov[d][h]<need[d][h])tryEmp(d,h)}}
+  // Pass 3: SH fills what's left where available
+  for(const d of [0,1,2,3,4]){const [o,c]=OPEN[d];let run=null;
+    for(let h=o;h<=c;h++){
+      const fill=h<c&&cov[d][h]<need[d][h]&&ownerOK(d,h)&&!ownerOn(d,h);
+      if(fill&&run===null)run=h;
+      if(!fill&&run!==null){add(d,run,h,OWNER,-1);run=null}
+    }}
+  const gaps=[];
+  DAYS.forEach((_,d)=>{const [o,c]=OPEN[d];let g=null;
+    for(let h=o;h<=c;h++){const miss=h<c&&cov[d][h]<need[d][h];
+      if(miss&&g===null)g=h;if(!miss&&g!==null){gaps.push({d,s:g,e:h,n:need[d][g]-cov[d][g]});g=null}}});
+  return {shifts,gaps,total,hrs,need};
+}
+
+// Recompute totals and uncovered time (half-hour steps) from the shifts as they stand,
+// so hand edits on the board are reflected everywhere
+function refresh(r){
+  r.hrs={};S.team.forEach((_,i)=>r.hrs[i]=0);r.total=0;
+  r.shifts.forEach(s=>{if(s.idx>=0){r.hrs[s.idx]+=s.e-s.s;r.total+=s.e-s.s}});
+  r.gaps=[];
+  DAYS.forEach((_,d)=>{const [o,c]=OPEN[d];let g=null;
+    for(let t=o;t<=c;t+=.5){
+      const n=t<c?r.shifts.filter(s=>s.d===d&&s.s<=t&&s.e>=t+.5).length:0;
+      const miss=t<c&&n<r.need[d][Math.floor(t)];
+      if(miss&&g===null)g=t;if(!miss&&g!==null){r.gaps.push({d,s:g,e:t});g=null}}});
+}
+function saveSched(){try{localStorage.setItem(KEY+'-sched',JSON.stringify(R.shifts))}catch(e){};hook('onSaveSched')}
+
+function render(r){
+  refresh(r);R=r;saveSched();
+  const sh=r.shifts.filter(s=>s.who===OWNER).reduce((p,s)=>p+s.e-s.s,0);
+  $('stats').innerHTML=`
+    <div class="stat"><div class="v num${r.total>S.cap?' bad':''}">${r.total}<span class="note"> / ${S.cap}</span></div><div class="l">Staff hours</div></div>
+    <div class="stat"><div class="v num">${sh}</div><div class="l">Sch hours</div></div>
+    <div class="stat"><div class="v num${r.gaps.length?' bad':''}">${r.gaps.reduce((p,g)=>p+g.e-g.s,0)}</div><div class="l">Uncovered hours</div></div>`;
+  const bad=[];
+  r.gaps.forEach(g=>bad.push(g.e===OPEN[g.d][1]?`<b>${DAYS[g.d]}: NO ONE TO CLOSE</b> (${fmt(g.s)}–${fmt(g.e)})`:`${DAYS[g.d]} ${fmt(g.s)}–${fmt(g.e)}: need 1 more person`));
+  S.team.forEach((e,i)=>{if(e.avail.flat().some(Boolean)&&!r.hrs[i])bad.push(`${e.name} got no shift (cap reached or days already covered)`)});
+  if(r.total>S.cap)bad.push(`Staff hours ${r.total} are over the ${S.cap} h cap`);
+  r.shifts.forEach(s=>{const L=s.e-s.s,tag=`${s.who} ${DAYS[s.d]} ${fmt(s.s)}–${fmt(s.e)}`;
+    if(s.idx<0){for(let t=Math.floor(s.s);t<s.e;t++)if(S.owner[s.d][part(t)]){bad.push(`${tag}: Sch marked this time as off`);break}return}
+    const e=S.team[s.idx];if(!e)return;
+    if(L<e.lo||L>e.hi)bad.push(`${tag}: ${L} h is outside ${e.name}'s ${e.lo}–${e.hi} h range`);
+    for(let t=Math.floor(s.s);t<s.e;t++)if(!e.avail[s.d][part(t)]){bad.push(`${tag}: outside ${e.name}'s available times`);break}
+    if(r.shifts.some(x=>x!==s&&x.idx===s.idx&&x.d===s.d&&x.s<s.e&&s.s<x.e))bad.push(`${tag}: overlaps another shift for the same person`)});
+  $('warnings').innerHTML=bad.length?`<div class="warn"><b>Needs your attention</b><ul>${bad.map(b=>`<li>${b}</li>`).join('')}</ul><div class="note">Fix: ask someone to add that day, raise the cap, or unblock Sch.</div></div>`:`<span class="ok">Every hour covered within the cap.</span>`;
+
+  const pct=h=>((h-T0)/(T1-T0)*100)+'%';
+  let html=`<div class="axis"><div></div><div class="ticks">${[8,10,12,14,16,18,20,22].map(h=>`<i style="left:${pct(h)}">${fmt(h)}</i>`).join('')}</div></div>`;
+  DAYS.forEach((D,d)=>{
+    const [o,c]=OPEN[d];
+    const list=r.shifts.map((s,k)=>({...s,k})).filter(s=>s.d===d).sort((a,b)=>a.s-b.s);
+    // stack bars into lanes so overlapping shifts don't collide
+    const lanes=[];list.forEach(s=>{let l=lanes.findIndex(end=>end<=s.s);if(l<0){l=lanes.length;lanes.push(0)}lanes[l]=s.e;s.lane=l});
+    const H=Math.max(1,lanes.length)*30+10;
+    let extras='';let es=null;for(let h=o;h<=c;h++){const two=h<c&&r.need[d][h]===2;if(two&&es===null)es=h;if(!two&&es!==null){extras+=`<div class="extramark" style="left:${pct(es)};width:calc(${pct(h)} - ${pct(es)})"></div>`;es=null}}
+    html+=`<div class="trow"><div class="dlabel">${D}<small>${fmt(o)}–${fmt(c)}</small></div>
+      <div class="track" style="height:${H}px">
+      ${c<T1?`<div class="closed" style="left:${pct(c)};right:0"></div>`:''}
+      ${extras}
+      ${list.map(s=>`<div class="bar${s.who===OWNER?' sh':''}${s.k===SEL?' sel':''}" data-k="${s.k}" style="left:${pct(s.s)};width:calc(${pct(s.e)} - ${pct(s.s)} - 2px);top:${6+s.lane*30}px" title="${s.who} ${fmt(s.s)}–${fmt(s.e)} · drag to move, drag edges to resize, click to edit"><i class="hl"></i><b>${s.who}</b><span>${fmt(s.s)}–${fmt(s.e)}</span><i class="hr"></i></div>`).join('')}
+      ${r.gaps.filter(g=>g.d===d).map(g=>`<div class="gapmark" style="left:${pct(g.s)};width:calc(${pct(g.e)} - ${pct(g.s)})"></div>`).join('')}
+      </div></div>`;
+  });
+  $('board').innerHTML=html;
+
+  const people=[...S.team.map((e,i)=>({name:e.name,i})),{name:OWNER,i:-1}];
+  $('totals').innerHTML=`<tr><th>Who</th>${DAYS.map(d=>`<th>${d}</th>`).join('')}<th>Total</th></tr>`+
+    people.map(p=>{const mine=r.shifts.filter(s=>p.i===-1?s.who===OWNER:s.idx===p.i);
+      const tot=mine.reduce((q,s)=>q+s.e-s.s,0);
+      return `<tr><td>${p.name}</td>${DAYS.map((_,d)=>{const x=mine.filter(s=>s.d===d);return `<td class="num">${x.map(s=>`${fmt(s.s)}–${fmt(s.e)}`).join('<br>')||'·'}</td>`}).join('')}<td class="num"><b>${tot}</b></td></tr>`}).join('');
+
+  const base=new Date((S.week||mondayOf(new Date()))+'T12:00:00');
+  $('txt').value=DAYS.map((D,d)=>{const x=r.shifts.filter(s=>s.d===d).sort((a,b)=>a.s-b.s||a.e-b.e);
+    const dt=new Date(base);dt.setDate(base.getDate()+d);
+    const md=String(dt.getMonth()+1).padStart(2,'0')+'/'+String(dt.getDate()).padStart(2,'0');
+    return `${D} (${md})\n`+(x.map(s=>`${s.who}: ${fmt(s.s)} - ${fmt(s.e)}`).join('\n')||'Closed / no one')}).join('\n\n');
+}
+
+// Preferred length first, then ±1; never under 4, never over 6
+const lens=l=>l>=6?[6,5]:l===5?[5,6]:[4,5];
+const shiftType=(s,d)=>s.s===OPEN[d.d??s.d][0]?'Morning':s.e===OPEN[s.d][1]?'Evening':'Mid';
+
+// Per-day exact search: shifts start at the first under-covered hour; cost punishes
+// overlap beyond what's needed, uncovered hours, SH time, and uneven staff hours.
+function build2(){
+  const need=[];
+  DAYS.forEach((_,d)=>{const [o,c]=OPEN[d];need[d]={};
+    for(let h=o;h<c;h++)need[d][h]=1;
+    const [rs,re]=S.rush[d];for(let h=rs;h<re;h++)if(h>=o&&h<c)need[d][h]=2;
+    const cs=S.comedy[d];if(cs)for(let h=cs-1;h<Math.min(c,cs+1);h++)need[d][h]=2;});
+  const ownerOK=(d,h)=>!S.owner[d][part(h)];
+  const staffReq=d=>{const [o,c]=OPEN[d];let n=0;for(let h=o;h<c;h++)n+=Math.max(0,need[d][h]-(ownerOK(d,h)?1:0));return n};
+  const hrs={},nd={};S.team.forEach((_,i)=>{hrs[i]=0;nd[i]=0});
+  let total=0;const shifts=[],gapHours=[];
+  const order=[5,6,4,3,1,0,2];
+  order.forEach((d,k)=>{
+    const [o,c]=OPEN[d];
+    const reserve=order.slice(k+1).reduce((p,x)=>p+staffReq(x),0);
+    const budget=Math.max(0,S.cap-total-reserve);
+    const cov={};for(let h=o;h<c;h++)cov[h]=0;
+    let best={cost:Infinity},cur=[],used=new Set(),spent=0,shUsed=false,nodes=0;
+    function dfs(cost){
+      if(cost>=best.cost||++nodes>200000)return;
+      let h=o;while(h<c&&cov[h]>=need[d][h])h++;
+      if(h>=c){best={cost,list:cur.slice()};return}
+      const opts=[];
+      S.team.forEach((e,i)=>{
+        if(used.has(i)||nd[i]>=e.max)return;
+        // may start up to 2 h early so the next person isn't left a too-short stub
+        for(let L=e.hi;L>=e.lo;L--)for(let s=h;s>=Math.max(o,h-2);s--){if(s+L>c||spent+L>budget)continue;
+          let ok=true;for(let t=s;t<s+L;t++)if(!e.avail[d][part(t)])ok=false;if(!ok)continue;
+          // shifts shorter than (max - 1) h are discouraged: staff prefer near-full shifts
+          opts.push({who:e.name,idx:i,s,e:s+L,w:L+Math.max(0,e.hi-1-L)*3+hrs[i]*0.15})}});
+      // Sch takes long blocks wherever free, like the usual weekday pattern
+      if(!shUsed&&ownerOK(d,h)){let e=h;while(e<c&&ownerOK(d,e))e++;
+        for(let x=e;x>h&&(x-h>=4||x===e);x--)opts.push({who:OWNER,idx:-1,s:h,e:x,w:(x-h)*0.3})}
+      // overlap costs a bit; staff on hours Sch could still cover costs more (Sch first on free hours)
+      opts.forEach(op=>{let ex=0,sf=0;for(let t=op.s;t<op.e;t++){if(cov[t]>=need[d][t])ex++;if(op.idx>=0&&!shUsed&&ownerOK(d,t))sf++}op.cost=ex*3+sf+op.w});
+      opts.sort((a,b)=>a.cost-b.cost);
+      for(const op of opts){
+        for(let t=op.s;t<op.e;t++)cov[t]++;cur.push(op);
+        if(op.idx>=0){used.add(op.idx);spent+=op.e-op.s}else shUsed=true;
+        dfs(cost+op.cost);
+        if(op.idx>=0){used.delete(op.idx);spent-=op.e-op.s}else shUsed=false;
+        cur.pop();for(let t=op.s;t<op.e;t++)cov[t]--;
+      }
+      // nobody fits: leave this hour uncovered
+      // closing hour uncovered is near-forbidden: bar must have a closer
+      cov[h]++;cur.push({gap:h});dfs(cost+(h===c-1?10000:need[d][h]===2?60:100));cur.pop();cov[h]--;
+    }
+    dfs(0);
+    best.list.forEach(x=>{
+      if(x.gap!==undefined){gapHours.push({d,h:x.gap});return}
+      shifts.push({d,s:x.s,e:x.e,who:x.who,idx:x.idx});
+      if(x.idx>=0){hrs[x.idx]+=x.e-x.s;nd[x.idx]++;total+=x.e-x.s}});
+  });
+  const gaps=[];
+  DAYS.forEach((_,d)=>{const hs=gapHours.filter(g=>g.d===d).map(g=>g.h).sort((a,b)=>a-b);
+    hs.forEach(h=>{const last=gaps[gaps.length-1];
+      if(last&&last.d===d&&last.e===h&&last.n===1)last.e++;else gaps.push({d,s:h,e:h+1,n:1})})});
+  return {shifts,gaps,total,hrs,need};
+}
+
+function run(){SEL=-1;render(build2());fillEditor()}
+
+// ---- hand editing ----
+const halfs=Array.from({length:(T1-T0)*2+1},(_,k)=>T0+k/2);
+function fillEditor(){
+  const s=R&&R.shifts[SEL];
+  $('eWho').innerHTML=[...S.team.map((e,i)=>`<option value="${i}">${e.name}</option>`),`<option value="-1">${OWNER}</option>`].join('');
+  $('eDay').innerHTML=DAYS.map((D,d)=>`<option value="${d}">${D}</option>`).join('');
+  $('eS').innerHTML=halfs.map(h=>`<option value="${h}">${fmt(h)}</option>`).join('');
+  $('eE').innerHTML=$('eS').innerHTML;
+  if(s){$('eWho').value=s.idx;$('eDay').value=s.d;$('eS').value=s.s;$('eE').value=s.e}
+  else{$('eS').value=16;$('eE').value=20}
+  $('eSave').disabled=$('eDel').disabled=!s;
+}
+function fromEditor(){
+  const idx=+$('eWho').value,d=+$('eDay').value,[o,c]=OPEN[d];
+  let s=Math.max(o,+$('eS').value),e=Math.min(c,+$('eE').value);if(e<=s)e=Math.min(c,s+1);
+  return {d,s,e,idx,who:idx<0?OWNER:S.team[idx].name};
+}
+$('eSave').onclick=()=>{if(SEL<0)return;R.shifts[SEL]=fromEditor();render(R);fillEditor()};
+$('eAdd').onclick=()=>{R.shifts.push(fromEditor());SEL=R.shifts.length-1;render(R);fillEditor()};
+$('eDel').onclick=()=>{if(SEL<0)return;R.shifts.splice(SEL,1);SEL=-1;render(R);fillEditor()};
+
+let drag=null;
+$('board').addEventListener('pointerdown',ev=>{
+  const bar=ev.target.closest('.bar');if(!bar)return;
+  const k=+bar.dataset.k,s=R.shifts[k];
+  const mode=ev.target.classList.contains('hl')?'l':ev.target.classList.contains('hr')?'r':'m';
+  drag={k,bar,mode,x:ev.clientX,s0:s.s,e0:s.e,pxh:bar.parentNode.clientWidth/(T1-T0),moved:false};
+  bar.setPointerCapture(ev.pointerId);bar.classList.add('drag');ev.preventDefault();
+});
+$('board').addEventListener('pointermove',ev=>{
+  if(!drag)return;
+  const s=R.shifts[drag.k],[o,c]=OPEN[s.d];
+  const dh=Math.round((ev.clientX-drag.x)/drag.pxh*2)/2;
+  if(dh!==0)drag.moved=true;
+  let a=drag.s0,b=drag.e0;
+  if(drag.mode==='m'){const len=b-a;a=Math.min(Math.max(o,a+dh),c-len);b=a+len}
+  else if(drag.mode==='l')a=Math.min(Math.max(o,a+dh),b-1);
+  else b=Math.max(Math.min(c,b+dh),a+1);
+  s.s=a;s.e=b;
+  const pct=h=>((h-T0)/(T1-T0)*100)+'%';
+  drag.bar.style.left=pct(a);drag.bar.style.width=`calc(${pct(b)} - ${pct(a)} - 2px)`;
+  drag.bar.querySelector('span').textContent=`${fmt(a)}–${fmt(b)}`;
+});
+const endDrag=()=>{if(!drag)return;const {k,moved}=drag;drag=null;SEL=k;render(R);fillEditor()};
+$('board').addEventListener('pointerup',endDrag);
+$('board').addEventListener('pointercancel',endDrag);
+$('build').onclick=run;
+$('add').onclick=()=>{S.team.push({name:'New person',lo:4,hi:6,max:3,avail:mk([],[]),lock:mk([],[]),email:''});save();renderSetup()};
+$('reset').onclick=()=>{if(LIVE&&!confirm('Replace your team and settings with the sample? Team emails will be cleared.'))return;
+  S.team.forEach(e=>hook('onStaffRemove',e.email));S=SAMPLE();S.team.forEach(fixEmp);LOCKMODE.clear();save();renderSetup();run()};
+$('cap').oninput=e=>{S.cap=+e.target.value||0;save()};
+$('schEmail').onchange=ev=>{const v=ev.target.value.trim().toLowerCase();
+  if(v&&S.team.some(x=>x.email===v)){ev.target.value=S.ownerEmail||'';$('schMsg').textContent='That email is on the team list; use a different one.';return}
+  S.ownerEmail=v;save();hook('onAdmins',v);$('schMsg').textContent=v?'Saved. Sch can now sign in with this email.':'Removed.'};
+$('wk').onchange=e=>{S.week=e.target.value;save();S.team.forEach(x=>hook('onStaff',x,false));run()};
+$('copy').onclick=()=>{navigator.clipboard.writeText($('txt').value).then(()=>{$('copy').textContent='Copied'},()=>{$('txt').select()})};
+// ---- owner: apply reply codes ----
+$('impApply').onclick=()=>{
+  const codes=($('imp').value.match(/r\.[A-Za-z0-9_-]+/g)||[]),done=[],bad=[];
+  codes.forEach(c=>{try{const r=dec(c.slice(2));
+    const e=S.team.find(x=>x.name.trim().toLowerCase()===String(r.n).trim().toLowerCase());
+    if(!e){bad.push(`${r.n} (no one with that name)`);return}
+    const a=unbits(r.a);
+    // only unlocked cells take the employee's answer
+    DAYS.forEach((_,d)=>[0,1,2].forEach(p=>{if(!e.lock[d][p])e.avail[d][p]=a[d][p]}));
+    done.push(e.name+(r.w&&S.week&&r.w!==S.week?` (code is for week ${r.w})`:''))}catch(err){bad.push('a code that could not be read')}});
+  save();renderSetup();
+  $('impMsg').textContent=(done.length?`Updated: ${done.join(', ')}. Press Build schedule.`:'No codes found.')+(bad.length?` Skipped: ${bad.join(', ')}.`:'');
+  if(done.length)$('imp').value='';
+};
+
+// ---- employee view: opened from an invite link ----
+function empMode(tok){
+  let inv;try{inv=dec(tok.slice(2))}catch(e){document.body.textContent='This link is broken. Ask your manager for a new one.';return}
+  $('ownerApp').hidden=true;$('empApp').hidden=false;
+  const avail=unbits(inv.a),lock=unbits(inv.l);
+  $('empHi').textContent=`Hi ${inv.n}`;
+  const d0=new Date(inv.w+'T12:00:00');
+  $('empSub').textContent=`Availability for the week starting ${d0.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})}.`;
+  const draw=()=>{
+    $('empGrid').innerHTML=`<tr><th></th>${DAYS.map(d=>`<th>${d}</th>`).join('')}</tr>`+PARTS.map((p,k)=>`<tr><td>${p}</td>${DAYS.map((_,j)=>`<td><label class="chip${avail[j][k]?' on':''}${lock[j][k]?' lk ro':''}" title="${DAYS[j]} ${p}${lock[j][k]?' (set by manager)':''}"><input type="checkbox" id="g${j}_${k}"${avail[j][k]?' checked':''}${lock[j][k]?' disabled':''}>${avail[j][k]?'yes':'–'}</label></td>`).join('')}</tr>`).join('');
+    DAYS.forEach((_,j)=>[0,1,2].forEach(k=>{const el=$(`g${j}_${k}`);if(!lock[j][k])el.onchange=()=>{avail[j][k]=el.checked?1:0;draw()}}));
+    $('empCode').value='r.'+enc({n:inv.n,w:inv.w,a:bits(avail)});$('empMsg').textContent='';
+  };
+  draw();
+  $('empCopy').onclick=()=>navigator.clipboard.writeText($('empCode').value).then(()=>{$('empMsg').textContent='Copied. Paste it in a text to your manager.'},()=>{$('empCode').select();$('empMsg').textContent='Press and hold to copy the selected code.'});
+}
+
+// ---- employee view, live: grid saves straight to the database ----
+function empLive(d,onChange){
+  $('ownerApp').hidden=true;$('empApp').hidden=false;
+  const ok=s=>typeof s==='string'&&/^[01]{21}$/.test(s);
+  const avail=unbits(ok(d.avail)?d.avail:'0'.repeat(21)),lock=unbits(ok(d.lock)?d.lock:'0'.repeat(21));
+  $('empHi').textContent=`Hi ${d.name||''}`.trim();
+  const d0=new Date((d.week||mondayOf(new Date()))+'T12:00:00');
+  $('empSub').textContent=`Availability for the week starting ${d0.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})}.`;
+  const draw=()=>{
+    $('empGrid').innerHTML=`<tr><th></th>${DAYS.map(x=>`<th>${x}</th>`).join('')}</tr>`+PARTS.map((p,k)=>`<tr><td>${p}</td>${DAYS.map((_,j)=>`<td><label class="chip${avail[j][k]?' on':''}${lock[j][k]?' lk ro':''}" title="${DAYS[j]} ${p}${lock[j][k]?' (set by manager)':''}"><input type="checkbox" id="g${j}_${k}"${avail[j][k]?' checked':''}${lock[j][k]?' disabled':''}>${avail[j][k]?'yes':'–'}</label></td>`).join('')}</tr>`).join('');
+    DAYS.forEach((_,j)=>[0,1,2].forEach(k=>{const el=$(`g${j}_${k}`);if(!lock[j][k])el.onchange=()=>{avail[j][k]=el.checked?1:0;draw();
+      $('empLiveMsg').textContent='Saving…';onChange(bits(avail))}}));
+  };
+  draw();
+}
+function empSaved(ok){$('empLiveMsg').innerHTML=ok?'<span class="saved">Saved ✓</span> Your manager sees this right away.':'Could not save. Check your connection and tap again.'}
+function empSchedule(p){if(!p||!p.text)return;$('empSchedWrap').hidden=false;$('empSched').textContent=p.text}
+// owner, live: take everyone's latest answers; locked cells keep the owner's value
+function mergeStaff(m){
+  let ch=false;
+  S.team.forEach(e=>{if(!e.email)return;const r=m[e.email];
+    if(!r){hook('onStaff',e,true);return} // new on the list: create their record
+    if(r.updatedAt&&r.updatedAt.toMillis)SYNC[e.email]=r.updatedAt.toMillis();
+    if(typeof r.avail==='string'&&/^[01]{21}$/.test(r.avail)){const a=unbits(r.avail);
+      DAYS.forEach((_,d)=>[0,1,2].forEach(p=>{if(!e.lock[d][p]&&e.avail[d][p]!==a[d][p]){e.avail[d][p]=a[d][p];ch=true}}))}});
+  if(ch){save();renderSetup()}
+  else S.team.forEach((e,i)=>{const n=$('ivm'+i);if(n&&!LOCKMODE.has(i))n.textContent=syncNote(e)});
+  return ch;
+}
+function startOwner(s,shifts){
+  if(s&&Array.isArray(s.team))S=s;S.team.forEach(fixEmp);
+  renderSetup();
+  if(Array.isArray(shifts)&&shifts.length){const r=build2();r.shifts=shifts;render(r);fillEditor()}else run();
+}
+window.app={S:()=>S,R:()=>R,bits,week:()=>S.week||mondayOf(new Date()),startOwner,mergeStaff,empLive,empSaved,empSchedule};
+
+const HASH=location.hash.slice(1);
+if(LIVE){$('ownerApp').hidden=true;$('gate').hidden=false;
+  document.querySelectorAll('.offline').forEach(x=>x.hidden=true);document.querySelectorAll('.live').forEach(x=>x.hidden=false)}
+else if(HASH.startsWith('p.'))empMode(HASH);
+else{
+renderSetup();
+// reopen the last (possibly hand-edited) schedule if there is one
+{let saved=null;try{saved=JSON.parse(localStorage.getItem(KEY+'-sched'))}catch(e){}
+ if(Array.isArray(saved)&&saved.length){const r=build2();r.shifts=saved;render(r);fillEditor()}else run();}
+}
+</script>
+<script type="module" src="live.js"></script>
+</body>
+</html>

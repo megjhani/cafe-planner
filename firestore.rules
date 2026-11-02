@@ -1,0 +1,37 @@
+rules_version = '2';
+// Cafe Shift Planner. Main owner: megjhani@gmail.com (also OWNER_EMAIL in index.html).
+// Extra admins (Sch) are listed in cafe/admins and set from the planner.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function me() { return request.auth.token.email.lower(); }
+    function adminsDoc() { return /databases/$(database)/documents/cafe/admins; }
+    function isOwner() {
+      return signedIn() && (me() == 'megjhani@gmail.com'
+        || (exists(adminsDoc()) && me() in get(adminsDoc()).data.emails));
+    }
+
+    // Planner settings, team list, schedule and the admin list: admins only.
+    match /cafe/state {
+      allow read, write: if isOwner();
+    }
+    match /cafe/admins {
+      allow read, write: if isOwner();
+    }
+    // Schedule text an admin shares: anyone on the team list can read it.
+    match /cafe/published {
+      allow read: if isOwner() || (signedIn() && exists(/databases/$(database)/documents/staff/$(me())));
+      allow write: if isOwner();
+    }
+    // One record per employee, named by their email.
+    // They can read only their own and change only their availability.
+    match /staff/{email} {
+      allow read, write: if isOwner();
+      allow get: if signedIn() && me() == email;
+      allow update: if signedIn() && me() == email
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['avail', 'updatedAt'])
+        && request.resource.data.avail is string
+        && request.resource.data.avail.matches('^[01]{21}$');
+    }
+  }
+}
