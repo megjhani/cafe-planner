@@ -3,6 +3,7 @@
 // Database layout
 //   cafe/state        admins only: whole planner (settings, team, schedule) as JSON strings
 //   cafe/admins       admins only: { emails: [Sch's email] } — extra accounts with full access
+//   weeks/<YYYY-MM-DD> admins only: a saved week — schedule text, shifts, pay rows, paid flags
 //   cafe/published    the staff text the owner shared; readable by anyone on the team
 //   staff/<email>     one per employee: name, week, avail, lock (21-char 0/1 strings).
 //                     The employee may read it and change only `avail` + `updatedAt`.
@@ -10,7 +11,7 @@ if (window.LIVE) {
   const B = 'https://www.gstatic.com/firebasejs/10.12.2/';
   const { initializeApp } = await import(B + 'firebase-app.js');
   const { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } = await import(B + 'firebase-auth.js');
-  const { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, onSnapshot, serverTimestamp } = await import(B + 'firebase-firestore.js');
+  const { getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, onSnapshot, serverTimestamp } = await import(B + 'firebase-firestore.js');
 
   const fb = initializeApp(window.FIREBASE_CONFIG), auth = getAuth(fb), db = getFirestore(fb);
   const OWNER = String(window.OWNER_EMAIL || '').trim().toLowerCase();
@@ -69,6 +70,11 @@ if (window.LIVE) {
       if (withAvail) go(); else tStaff[k] = setTimeout(go, 500);
     };
     window.onStaffRemove = email => { if (email) deleteDoc(doc(db, 'staff', email)).catch(fail); };
+    // saved weeks (schedule + pay) live in weeks/<week start>, admins only
+    window.weekStore = {
+      list: async () => (await getDocs(collection(db, 'weeks'))).docs.map(s => s.data()),
+      save: rec => setDoc(doc(db, 'weeks', rec.week), rec),
+    };
     window.onAdmins = email => setDoc(doc(db, 'cafe', 'admins'), { emails: email ? [email] : [] }).catch(fail);
     if (!snap.exists()) { pushState(); pushSched(); }
 

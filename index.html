@@ -35,6 +35,13 @@ window.LIVE = !!window.FIREBASE_CONFIG.apiKey;
   --extra:#b49be0; --warn:#f2867c; --warn-soft:#3f1d1a; color-scheme:dark}
 body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45}
 [hidden]{display:none!important}
+.tabs{display:flex;flex-wrap:wrap;gap:6px}
+.tab{font-weight:600}
+.tab.on{background:var(--accent);color:var(--panel);border-color:var(--accent)}
+input.pn{width:76px;font:inherit;font-family:var(--mono);color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+.chip.paid{background:var(--accent-soft);border-color:var(--accent);font-weight:600}
+.chip.due{border-color:var(--owner);background:var(--owner-soft)}
+#histDetail pre{margin:0;font-family:var(--mono);font-size:.8rem;white-space:pre-wrap}
 .wrap{max-width:1280px;margin:0 auto;padding-block:24px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:20px}
 header{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px}
 h1{font-family:var(--display);font-size:2rem;margin:0;letter-spacing:-.01em}
@@ -161,7 +168,13 @@ pre.sched{margin:0;font-family:var(--mono);font-size:.82rem;white-space:pre-wrap
     </div>
   </header>
 
-  <div class="grid">
+  <nav class="tabs" aria-label="Sections">
+    <button class="tab on" data-v="sched">Schedule</button>
+    <button class="tab" data-v="pay">Pay</button>
+    <button class="tab" data-v="hist">Payments</button>
+  </nav>
+
+  <div class="grid" id="v-sched">
     <div class="col">
       <section class="panel">
         <h2>This week</h2>
@@ -237,6 +250,37 @@ pre.sched{margin:0;font-family:var(--mono);font-size:.82rem;white-space:pre-wrap
       </section>
     </div>
   </div>
+
+  <section class="panel" id="v-pay" hidden>
+    <div class="row" style="justify-content:space-between">
+      <h2 id="payTitle">Pay</h2>
+      <div class="row"><button id="payFromSched">Use hours from schedule</button><button class="primary" id="paySave">Save week</button></div>
+    </div>
+    <div class="row">
+      <label class="small" for="pTips">Tips collected $</label><input type="number" class="pn" id="pTips" min="0" step="0.01">
+      <label class="small" for="pTax">Tax rate %</label><input type="number" class="pn" id="pTax" min="0" max="99" step="0.1">
+      <label class="small" for="pSch">Sch hourly $</label><input type="number" class="pn" id="pSch" min="0" step="0.5">
+    </div>
+    <div class="scroll"><table id="payTable"></table></div>
+    <h2>For Amin</h2>
+    <div class="stats" id="amin"></div>
+    <p class="note">Hours start from the current schedule; type over any number to adjust. Tips are shared by hours worked, then taxed. Amount to request = total wages grossed up for tax; hours = that amount at Sch's rate. "Save week" stores the schedule and pay for this week so you can track payments.</p>
+    <p class="note" id="payMsg"></p>
+  </section>
+
+  <div class="col" id="v-hist" hidden>
+    <section class="panel">
+      <div class="row" style="justify-content:space-between"><h2>Payments by week</h2><button id="csv">Export CSV</button></div>
+      <p class="note">Tap an amount once you've paid it. Orange = still to pay.</p>
+      <div class="scroll"><table id="histWeeks"></table></div>
+      <div id="histDetail"></div>
+    </section>
+    <section class="panel">
+      <h2>By month</h2>
+      <div class="scroll"><table id="histMonths"></table></div>
+      <p class="note">A week counts in the month it starts in.</p>
+    </section>
+  </div>
 </div>
 
 <script>
@@ -254,6 +298,7 @@ const mondayOf=dt=>{const x=new Date(dt);x.setDate(x.getDate()-((x.getDay()+6)%7
 
 // avail[day][part]: 1 = happy to work that part of that day
 const mk=(days,parts)=>DAYS.map((_,d)=>[0,1,2].map(p=>days.includes(d)&&parts.includes(p)?1:0));
+const RATES={Masha:14,Carmen:11,Roxy:8,Ave:8}; // starting hourly rates (salary sheet)
 const SAMPLE=()=>({
   cap:62,
   comedy:[0,0,0,0,18,0,0], // show start hour per day, 0 = no show
@@ -271,7 +316,7 @@ const SAMPLE=()=>({
 let S;
 try{S=JSON.parse(localStorage.getItem(KEY))}catch(e){}
 if(!S||!S.team)S=SAMPLE();
-const fixEmp=e=>{if(!e.lock)e.lock=mk([],[]);if(e.email==null)e.email=''};
+const fixEmp=e=>{if(!e.lock)e.lock=mk([],[]);if(e.email==null)e.email='';if(e.rate==null)e.rate=RATES[e.name]||0};
 S.team.forEach(fixEmp);
 const LIVE=!!window.LIVE,SYNC={}; // SYNC[email] = last time that person saved (live mode)
 const hook=(n,...a)=>{if(typeof window[n]==='function')window[n](...a)};
@@ -662,6 +707,102 @@ function startOwner(s,shifts){
   if(Array.isArray(shifts)&&shifts.length){const r=build2();r.shifts=shifts;render(r);fillEditor()}else run();
 }
 window.app={S:()=>S,R:()=>R,bits,week:()=>S.week||mondayOf(new Date()),startOwner,mergeStaff,empLive,empSaved,empSchedule};
+
+// ---- pay: same math as the salary spreadsheet ----
+const money=v=>'$'+(Math.round((+v||0)*100)/100).toFixed(2);
+const fmtWeek=w=>new Date(w+'T12:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+const sum=(a,k)=>a.reduce((p,x)=>p+(+x[k]||0),0);
+function payState(){
+  const wk=S.week||mondayOf(new Date());
+  if(!S.pay)S.pay={tax:22.6,schRate:25};
+  if(!S.payWeek||S.payWeek.week!==wk)S.payWeek={week:wk,tips:0,hours:null}; // new week: fresh tips, hours from schedule
+  return S.payWeek;
+}
+function schedHours(){const h={};S.team.forEach((e,i)=>h[e.name]=R&&R.hrs?+(R.hrs[i]||0):0);return h}
+function payCalc(){
+  const pw=payState(),hours=pw.hours||schedHours(),tax=+S.pay.tax||0;
+  const rows=S.team.map(e=>({name:e.name,rate:+e.rate||0,hours:+hours[e.name]||0}));
+  const H=sum(rows,'hours');
+  rows.forEach(r=>{r.wage=r.rate*r.hours;r.tips=H?(+pw.tips||0)*r.hours/H:0;r.tipsNet=r.tips*(1-tax/100);r.total=r.wage+r.tipsNet});
+  const wage=sum(rows,'wage'),amount=tax<100?wage/(100-tax)*100:0,schRate=+S.pay.schRate||0;
+  return {week:pw.week,tipsCollected:+pw.tips||0,tax,schRate,rows,
+    tot:{hours:H,wage,tips:sum(rows,'tips'),tipsNet:sum(rows,'tipsNet'),total:sum(rows,'total')},
+    amin:{amount,hours:schRate?amount/schRate:0,tips:sum(rows,'tips')}};
+}
+function renderPay(){
+  const c=payCalc(),pw=payState();
+  $('payTitle').textContent='Pay · week of '+fmtWeek(c.week);
+  $('pTips').value=pw.tips||'';$('pTax').value=S.pay.tax;$('pSch').value=S.pay.schRate;
+  $('payTable').innerHTML=`<tr><th>Name</th><th>Rate $/h</th><th>Hours</th><th>Wage</th><th>Tips</th><th>Tips after tax</th><th>Total to pay</th></tr>`+
+    c.rows.map((r,i)=>`<tr><td>${esc(r.name)}</td><td><input type="number" class="pn" id="pr${i}" value="${r.rate}" min="0" step="0.25" aria-label="${esc(r.name)} hourly rate"></td><td><input type="number" class="pn" id="ph${i}" value="${r.hours}" min="0" step="0.5" aria-label="${esc(r.name)} hours"></td><td class="num">${money(r.wage)}</td><td class="num">${money(r.tips)}</td><td class="num">${money(r.tipsNet)}</td><td class="num"><b>${money(r.total)}</b></td></tr>`).join('')+
+    `<tr><td><b>Total</b></td><td></td><td class="num"><b>${c.tot.hours}</b></td><td class="num"><b>${money(c.tot.wage)}</b></td><td class="num"><b>${money(c.tot.tips)}</b></td><td class="num"><b>${money(c.tot.tipsNet)}</b></td><td class="num"><b>${money(c.tot.total)}</b></td></tr>`;
+  c.rows.forEach((r,i)=>{
+    $('pr'+i).onchange=ev=>{S.team[i].rate=+ev.target.value||0;save();renderPay()};
+    $('ph'+i).onchange=ev=>{const p=payState();if(!p.hours)p.hours=schedHours();p.hours[r.name]=+ev.target.value||0;save();renderPay()}});
+  $('amin').innerHTML=[['Amount to request',money(c.amin.amount)],['Hours at Sch rate',Math.round(c.amin.hours*100)/100],['Tips',money(c.amin.tips)]]
+    .map(([l,v])=>`<div class="stat"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+}
+$('pTips').onchange=ev=>{payState().tips=+ev.target.value||0;save();renderPay()};
+$('pTax').onchange=ev=>{payState();S.pay.tax=+ev.target.value||0;save();renderPay()};
+$('pSch').onchange=ev=>{payState();S.pay.schRate=+ev.target.value||0;save();renderPay()};
+$('payFromSched').onclick=()=>{payState().hours=null;save();renderPay()};
+
+// ---- saved weeks: schedule + pay, in the database when live (else this browser) ----
+const localWeeks={
+  all(){try{return JSON.parse(localStorage.getItem(KEY+'-weeks'))||{}}catch(e){return {}}},
+  async list(){return Object.values(this.all())},
+  async save(rec){const a=this.all();a[rec.week]=rec;try{localStorage.setItem(KEY+'-weeks',JSON.stringify(a))}catch(e){}}};
+const weekStore=()=>window.weekStore||localWeeks;
+let WEEKS=[];
+$('paySave').onclick=async()=>{
+  const c=payCalc(),old=WEEKS.find(w=>w.week===c.week);
+  const was=n=>old&&old.rows.find(o=>o.name===n);
+  const rec={week:c.week,savedAt:new Date().toISOString(),staffText:$('txt').value,
+    shifts:R?R.shifts.map(s=>({d:s.d,s:s.s,e:s.e,who:s.who})):[],
+    tipsCollected:c.tipsCollected,tax:c.tax,schRate:c.schRate,amin:c.amin,
+    rows:c.rows.map(r=>({...r,paid:!!(was(r.name)&&was(r.name).paid),paidOn:(was(r.name)&&was(r.name).paidOn)||null}))};
+  $('payMsg').textContent='Saving…';
+  try{await weekStore().save(rec);await loadWeeks();$('payMsg').textContent=`Saved week of ${fmtWeek(c.week)}. See it under Payments.`}
+  catch(e){$('payMsg').textContent='Could not save ('+(e.code||e.message)+').'}
+};
+async function loadWeeks(){
+  try{WEEKS=(await weekStore().list()).filter(w=>w&&w.week&&Array.isArray(w.rows)).sort((a,b)=>b.week.localeCompare(a.week))}catch(e){WEEKS=[]}
+  renderHist();
+}
+function renderHist(){
+  const names=[...new Set(WEEKS.flatMap(w=>w.rows.filter(r=>r.total>0).map(r=>r.name)))];
+  if(!WEEKS.length){$('histWeeks').innerHTML='<tr><td>No saved weeks yet. Fill in the Pay tab and press "Save week".</td></tr>';$('histMonths').innerHTML='';$('histDetail').innerHTML='';return}
+  $('histWeeks').innerHTML=`<tr><th>Week of</th>${names.map(n=>`<th>${esc(n)}</th>`).join('')}<th>Total</th><th>Still to pay</th><th></th></tr>`+
+    WEEKS.map((w,wi)=>`<tr><td>${fmtWeek(w.week)}</td>${names.map(n=>{const r=w.rows.find(x=>x.name===n);
+      return `<td>${r&&r.total>0?`<label class="chip ${r.paid?'paid':'due'}" title="${r.paid?'Paid'+(r.paidOn?' '+r.paidOn:''):'Tap when paid'}"><input type="checkbox" data-w="${wi}" data-n="${esc(n)}"${r.paid?' checked':''}>${money(r.total)}${r.paid?' ✓':''}</label>`:'–'}</td>`}).join('')}
+      <td class="num"><b>${money(sum(w.rows,'total'))}</b></td><td class="num">${money(sum(w.rows.filter(r=>!r.paid),'total'))}</td><td><button data-sh="${wi}">Schedule</button></td></tr>`).join('');
+  $('histWeeks').querySelectorAll('input[data-w]').forEach(el=>el.onchange=async()=>{
+    const w=WEEKS[+el.dataset.w],r=w.rows.find(x=>x.name===el.dataset.n);
+    r.paid=el.checked;r.paidOn=el.checked?new Date().toISOString().slice(0,10):null;
+    renderHist();try{await weekStore().save(w)}catch(e){alert('Could not save: '+(e.code||e.message))}});
+  $('histWeeks').querySelectorAll('button[data-sh]').forEach(b=>b.onclick=()=>{const w=WEEKS[+b.dataset.sh];
+    $('histDetail').innerHTML=`<h2>Week of ${fmtWeek(w.week)}</h2><pre></pre>`;$('histDetail').querySelector('pre').textContent=w.staffText||'(no schedule text saved)'});
+  // monthly totals per person
+  const months={};WEEKS.forEach(w=>{const m=w.week.slice(0,7);(months[m]=months[m]||[]).push(...w.rows)});
+  const mName=m=>new Date(m+'-15T12:00:00').toLocaleDateString(undefined,{month:'long',year:'numeric'});
+  $('histMonths').innerHTML=`<tr><th>Month</th>${names.map(n=>`<th>${esc(n)}</th>`).join('')}<th>Total</th><th>Paid</th><th>Still to pay</th></tr>`+
+    Object.keys(months).sort().reverse().map(m=>{const rs=months[m];
+      return `<tr><td>${mName(m)}</td>${names.map(n=>`<td class="num">${money(sum(rs.filter(r=>r.name===n),'total'))}</td>`).join('')}<td class="num"><b>${money(sum(rs,'total'))}</b></td><td class="num">${money(sum(rs.filter(r=>r.paid),'total'))}</td><td class="num">${money(sum(rs.filter(r=>!r.paid),'total'))}</td></tr>`}).join('');
+}
+$('csv').onclick=async()=>{
+  const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
+  const lines=[['week','name','rate','hours','wage','tips','tips_after_tax','total','paid','paid_on'].join(',')];
+  WEEKS.slice().reverse().forEach(w=>w.rows.forEach(r=>lines.push([w.week,q(r.name),r.rate,r.hours,r.wage.toFixed(2),r.tips.toFixed(2),r.tipsNet.toFixed(2),r.total.toFixed(2),r.paid?'yes':'no',r.paidOn||''].join(','))));
+  // inside Claude the page saves through the viewer's download prompt; on the website, a normal download
+  const dl=window.claude&&window.claude.use?await window.claude.use('downloads'):null;
+  if(dl){try{await dl.save({filename:'cafe-payments.csv',data:lines.join('\n')})}catch(e){}return}
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/csv'}));
+  a.download='cafe-payments.csv';document.body.appendChild(a);a.click();a.remove();
+};
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===b));
+  ['sched','pay','hist'].forEach(v=>$('v-'+v).hidden=v!==b.dataset.v);
+  if(b.dataset.v==='pay')renderPay();if(b.dataset.v==='hist')loadWeeks()});
 
 const HASH=location.hash.slice(1);
 if(LIVE){$('ownerApp').hidden=true;$('gate').hidden=false;

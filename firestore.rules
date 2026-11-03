@@ -18,6 +18,10 @@ service cloud.firestore {
     match /cafe/admins {
       allow read, write: if isOwner();
     }
+    // Saved weeks: schedule, pay and who has been paid. Admins only.
+    match /weeks/{week} {
+      allow read, write: if isOwner();
+    }
     // Schedule text an admin shares: anyone on the team list can read it.
     match /cafe/published {
       allow read: if isOwner() || (signedIn() && exists(/databases/$(database)/documents/staff/$(me())));
