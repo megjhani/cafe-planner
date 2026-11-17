@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tipsy Village Money</title>
+<script>
+// Same Firebase project as the shift planner; only owners (the rules' admins) can read this data.
+window.FIREBASE_CONFIG = {
+  apiKey: "AIzaSyB5xPVbwzVf80S6wEUAZ7FsfmtJIJWjSys",
+  authDomain: "cafe-planner-e0803.firebaseapp.com",
+  projectId: "cafe-planner-e0803",
+  appId: "1:371628101359:web:2ccdf1bd2bfdb16991151a"
+};
+</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --bg:#f3f5f4; --panel:#ffffff; --fg:#1d2624; --muted:#5f6d69; --line:#d9e0dd;
+  --accent:#1f6f5c; --accent-soft:#d6ebe4; --warn:#b3261e; --warn-soft:#fbe1de; --good:#1f6f5c;
+  --series-1:#2a78d6; --series-2:#eb6834; --grid:#e6ebe9;
+  --display:"Bricolage Grotesque",system-ui,sans-serif; --body:"Figtree",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#121816; --panel:#1a2220; --fg:#e4ebe8; --muted:#97a6a1; --line:#2c3835;
+  --accent:#5cc4a6; --accent-soft:#1d3a32; --warn:#f2867c; --warn-soft:#3f1d1a; --good:#5cc4a6;
+  --series-1:#3987e5; --series-2:#d95926; --grid:#26302d; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121816; --panel:#1a2220; --fg:#e4ebe8; --muted:#97a6a1; --line:#2c3835;
+  --accent:#5cc4a6; --accent-soft:#1d3a32; --warn:#f2867c; --warn-soft:#3f1d1a; --good:#5cc4a6;
+  --series-1:#3987e5; --series-2:#d95926; --grid:#26302d; color-scheme:dark}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45}
+.wrap{max-width:1240px;margin:0 auto;padding:24px max(16px,env(safe-area-inset-left,0px)) 48px;display:grid;gap:18px}
+header{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px}
+h1{font-family:var(--display);font-size:2rem;margin:0;letter-spacing:-.01em}
+h2{font-family:var(--display);font-size:1.1rem;margin:0}
+.sub,.note{color:var(--muted)}
+.note{font-size:.82rem;margin:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px;min-width:0}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.between{justify-content:space-between}
+button,select,input[type=search]{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 12px}
+select{padding:6px 8px}
+button{cursor:pointer}
+a.btn{color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 12px;text-decoration:none;font-weight:600}
+button.primary{background:var(--accent);color:var(--panel);border-color:var(--accent);font-weight:600}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tabs{display:flex;flex-wrap:wrap;gap:6px}
+.tab{font-weight:600}
+.tab.on{background:var(--accent);color:var(--panel);border-color:var(--accent)}
+.badge{display:inline-block;min-width:18px;padding:0 6px;border-radius:999px;background:var(--warn);color:var(--panel);font-size:.72rem;line-height:18px;text-align:center;margin-left:4px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.kpi .l{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.kpi .v{font-family:var(--display);font-size:1.7rem;font-weight:700;font-variant-numeric:tabular-nums}
+.kpi .d{font-size:.8rem;color:var(--muted)}
+.neg{color:var(--warn)}
+.grid2{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.grid2{grid-template-columns:minmax(0,1fr)}}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.86rem}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:500;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.sel td{background:var(--accent-soft)}
+tr.click{cursor:pointer}
+tr.click:hover td{background:var(--bg)}
+.desc{color:var(--muted);font-size:.78rem;max-width:420px;overflow-wrap:anywhere}
+/* charts */
+.chart{position:relative}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.chart text{font-family:var(--body);font-size:11px;fill:var(--muted)}
+.legend{display:flex;gap:16px;font-size:.82rem;color:var(--muted)}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-2px}
+.tip{position:absolute;pointer-events:none;background:var(--fg);color:var(--bg);font-size:.8rem;border-radius:6px;padding:6px 9px;white-space:nowrap;transform:translate(-50%,-100%);z-index:3}
+.hbar{display:grid;grid-template-columns:minmax(120px,1.1fr) minmax(0,2fr) auto;gap:10px;align-items:center;padding:5px 6px;border-radius:6px;cursor:pointer}
+.hbar:hover,.hbar.sel{background:var(--accent-soft)}
+.hbar .track{height:12px;background:var(--grid);border-radius:4px;overflow:hidden}
+.hbar .fill{height:100%;background:var(--series-1);border-radius:0 4px 4px 0}
+.hbar .amt{font-family:var(--mono);font-size:.85rem;text-align:right;min-width:90px}
+.grp{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:6px}
+.drop{border:2px dashed var(--line);border-radius:10px;padding:26px;text-align:center;color:var(--muted)}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.ok{color:var(--good);font-weight:600}
+.bad{color:var(--warn);font-weight:600}
+.gate{max-width:440px;margin:14vh auto 0;text-align:center;justify-items:center}
+.cat{max-width:210px}
+</style>
+</head>
+<body>
+
+<div class="wrap gate" id="gate">
+  <h1>Tipsy Village Money</h1>
+  <p class="sub">Owners only. Sign in with the Google account that runs the planner. <a href="../">Back to the shift planner</a></p>
+  <button class="primary" id="signin" hidden>Sign in with Google</button>
+  <p class="note" id="gateMsg">Loading…</p>
+  <button id="gateOut" hidden>Use a different account</button>
+</div>
+
+<div class="wrap" id="app" hidden>
+  <header>
+    <div>
+      <h1>Tipsy Village Money</h1>
+      <p class="sub" id="coverage"></p>
+    </div>
+    <div class="row">
+      <label class="note" for="period">Period</label>
+      <select id="period"></select>
+      <span class="note" id="who"></span>
+      <a class="btn" href="../">Shift planner</a>
+      <button id="signout">Sign out</button>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Sections">
+    <button class="tab on" data-v="overview">Overview</button>
+    <button class="tab" data-v="expenses">Expenses</button>
+    <button class="tab" data-v="txns">Transactions</button>
+    <button class="tab" data-v="review">Needs review<span class="badge" id="reviewCount" hidden></span></button>
+    <button class="tab" data-v="statements">Statements</button>
+  </nav>
+
+  <section id="v-overview" class="view" style="display:grid;gap:18px">
+    <div class="kpis" id="kpis"></div>
+    <div class="grid2">
+      <section class="panel">
+        <div class="row between"><h2>Revenue and expenses by month</h2>
+          <div class="legend"><span><i style="background:var(--series-1)"></i>Revenue</span><span><i style="background:var(--series-2)"></i>Expenses</span></div></div>
+        <div class="chart" id="monthChart"></div>
+        <p class="note">Expenses = cost of goods + labor + operating. Taxes, card payments and transfers are left out. Click a month to look at it.</p>
+      </section>
+      <section class="panel">
+        <h2>Money in and out</h2>
+        <div class="scroll"><table id="cashTable"></table></div>
+        <p class="note">Card payments move money from the bank to the card. They are not expenses, because the purchases were already counted when you made them.</p>
+      </section>
+    </div>
+    <section class="panel">
+      <h2>Profit and loss by month</h2>
+      <div class="scroll"><table id="plTable"></table></div>
+    </section>
+    <section class="panel">
+      <h2>Credit card debt</h2>
+      <p class="note" id="debtSummary" style="font-size:.9rem;color:var(--fg)"></p>
+      <div class="scroll"><table id="debtTable"></table></div>
+      <p class="note">Paying the card isn't counted as an expense: purchases count when you make them, and the construction costs were spent before 2026. Paying the card down reduces what you owe.</p>
+    </section>
+  </section>
+
+  <section id="v-expenses" class="view" hidden>
+    <div class="grid2">
+      <section class="panel">
+        <div class="row between"><h2 id="expTitle">Expenses</h2><span class="note">Click a category</span></div>
+        <div id="catBars"></div>
+      </section>
+      <section class="panel" id="catDetail">
+        <p class="note">Pick a category to see its suppliers and transactions.</p>
+      </section>
+    </div>
+  </section>
+
+  <section id="v-txns" class="view panel" hidden>
+    <div class="row">
+      <input type="search" id="q" placeholder="Search payee or description" aria-label="Search">
+      <select id="fAcct" aria-label="Account"></select>
+      <select id="fCat" aria-label="Category"></select>
+      <span class="note" id="txCount"></span>
+    </div>
+    <div class="scroll"><table id="txTable"></table></div>
+  </section>
+
+  <section id="v-review" class="view panel" hidden>
+    <h2>Needs review</h2>
+    <p class="note">Chase doesn't say who a check was written to, or what cash or a branch deposit was for. Pick a category for each one. Tick "all from this payee" to set a rule for every future transaction from the same place.</p>
+    <div class="scroll"><table id="reviewTable"></table></div>
+  </section>
+
+  <section id="v-statements" class="view" hidden style="display:grid;gap:18px">
+    <section class="panel">
+      <h2>Upload statements</h2>
+      <label class="drop" id="drop" for="files">Drop Chase bank or credit card statement PDFs here, or click to choose. You can add several months at once.
+        <input type="file" id="files" accept="application/pdf,.pdf" multiple hidden></label>
+      <div id="uploadLog"></div>
+      <p class="note">Each PDF is read in your browser and checked against the totals printed on it. Only the transactions are saved. Uploading the same statement twice is harmless.</p>
+    </section>
+    <section class="panel">
+      <h2>Saved statements</h2>
+      <div class="scroll"><table id="stmtTable"></table></div>
+    </section>
+  </section>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

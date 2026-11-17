@@ -35,6 +35,7 @@ window.LIVE = !!window.FIREBASE_CONFIG.apiKey;
   --extra:#b49be0; --warn:#f2867c; --warn-soft:#3f1d1a; color-scheme:dark}
 body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45}
 [hidden]{display:none!important}
+a.btn{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 12px;text-decoration:none;font-weight:600}
 .tabs{display:flex;flex-wrap:wrap;gap:6px}
 .tab{font-weight:600}
 .tab.on{background:var(--accent);color:var(--panel);border-color:var(--accent)}
@@ -162,7 +163,7 @@ pre.sched{margin:0;font-family:var(--mono);font-size:.82rem;white-space:pre-wrap
       <p class="sub">Mark preferences, press Build. Sample team loaded — rename or replace with your staff.</p>
     </div>
     <div class="row">
-      <span class="note who live" hidden></span><button class="signout live" hidden>Sign out</button>
+      <span class="note who live" hidden></span><a class="btn live" hidden href="money/">Money</a><button class="signout live" hidden>Sign out</button>
       <button id="reset">Reset to sample</button>
       <button class="primary" id="build">Build schedule</button>
     </div>
