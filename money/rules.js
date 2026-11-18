@@ -158,13 +158,27 @@ const KNOWN = [
 // category for a transaction: your choice for this transaction, else what the owners
 // explained, else your rule for its payee, else the built-in rules; checks, ATM cash and
 // branch deposits wait for you to assign them
+// older labels without a partner name, and the kind each one means
+const UNNAMED_OWNER = { 'Owner investment': 'investment', 'Owner loan / repayment': 'loan / repayment', 'Owner draw': 'draw' };
+
 export function categorize(t, prefs = {}) {
   const byTx = prefs.tx || {}, byPayee = prefs.payee || {};
-  if (byTx[t.id]) return byTx[t.id];
+  const chosen = byTx[t.id] || null;
+  if (chosen && !UNNAMED_OWNER[chosen]) return chosen;
+  const auto = autoCategory(t, byPayee);
+  // a choice saved before partners had names: keep its kind, take the partner from the
+  // owners' explanations or the rules (the $10,000 and $9,500 deposits, for example)
+  if (chosen) return partnerOf(auto) ? partnerCat(partnerOf(auto), UNNAMED_OWNER[chosen]) : chosen;
+  return auto;
+}
+
+function autoCategory(t, byPayee) {
   for (const [d, a, re, cat] of KNOWN) if (t.date === d && Math.abs(t.amount - a) < 0.005 && re.test(t.desc)) return cat;
-  if (byPayee[t.payee]) return byPayee[t.payee];
+  const own = byPayee[t.payee];
+  if (own && !UNNAMED_OWNER[own]) return own;
   const hay = `${t.payee} | ${t.desc}`;
-  for (const [re, cat] of RULES) if (re.test(hay)) return cat;
+  for (const [re, cat] of RULES) if (re.test(hay)) return own && partnerOf(cat) ? partnerCat(partnerOf(cat), UNNAMED_OWNER[own]) : own || cat;
+  if (own) return own;
   if (t.section === 'check') return 'Checks (assign)';
   if (t.section === 'atm' && /ATM Withdrawal/i.test(t.desc)) return 'Cash withdrawals (assign)';
   // branch, cash or check deposits: could be sales, a loan or a partner's money
