@@ -1,10 +1,11 @@
 // Tipsy Village Money: owner dashboard built from uploaded Chase statements.
 // Data: fin_statements/<account>_<start> (one per statement, with its transactions)
 //       fin/prefs { payee: {payee: category}, tx: {txId: category} } (your corrections)
-// Both are owner-only in the database rules. Open with ?local to keep everything in this
+//       fin/ledger { file, importedAt, rows: [...] } (partners' workbook: what each paid personally)
+// All are owner-only in the database rules. Open with ?local to keep everything in this
 // browser instead (testing / offline); nothing is sent anywhere in that mode.
 import { pdfLines, parseStatement } from './parser.js';
-import { CATEGORIES, GROUPS, GROUP_OF, categorize, bookAmount } from './rules.js';
+import { CATEGORIES, GROUPS, GROUP_OF, OPEN_DATE, PARTNERS, categorize, bookAmount, startupAmount, partnerOf, isLoan } from './rules.js';
 import * as A from '../access.js';
 
 const $ = id => document.getElementById(id);
@@ -16,7 +17,7 @@ const dName = d => new Date(d + 'T12:00:00').toLocaleDateString(undefined, { mon
 const sum = (a, f) => a.reduce((p, t) => p + f(t), 0);
 
 let RO = false; // view-only owner
-let store = null, STMTS = [], PREFS = { payee: {}, tx: {} }, TX = [], MONTHS = [], PERIOD = null, VIEW = 'overview', CAT = null;
+let store = null, STMTS = [], PREFS = { payee: {}, tx: {} }, LEDGER = null, TX = [], MONTHS = [], PERIOD = null, VIEW = 'overview', CAT = null, SCAT = null;
 
 // ---------- storage ----------
 const localStore = {
@@ -25,6 +26,8 @@ const localStore = {
   async removeStatement(k) { localStorage.setItem('fin-statements', JSON.stringify((await this.statements()).filter(x => x.key !== k))); },
   async prefs() { try { return JSON.parse(localStorage.getItem('fin-prefs')) || {}; } catch { return {}; } },
   async savePrefs(p) { localStorage.setItem('fin-prefs', JSON.stringify(p)); },
+  async ledger() { try { return JSON.parse(localStorage.getItem('fin-ledger')); } catch { return null; } },
+  async saveLedger(l) { localStorage.setItem('fin-ledger', JSON.stringify(l)); },
 };
 
 async function start() {
@@ -44,6 +47,8 @@ async function start() {
     removeStatement: k => deleteDoc(doc(db, 'fin_statements', k)),
     prefs: async () => { const s = await getDoc(doc(db, 'fin', 'prefs')); return s.exists() ? s.data() : {}; },
     savePrefs: p => setDoc(doc(db, 'fin', 'prefs'), p),
+    ledger: async () => { const s = await getDoc(doc(db, 'fin', 'ledger')); return s.exists() ? s.data() : null; },
+    saveLedger: l => setDoc(doc(db, 'fin', 'ledger'), l),
   };
   $('signin').onclick = async () => {
     const p = new GoogleAuthProvider(); p.setCustomParameters({ prompt: 'select_account' });
@@ -71,8 +76,8 @@ async function start() {
 }
 
 async function load() {
-  const [st, pr] = await Promise.all([store.statements(), store.prefs()]);
-  STMTS = st; PREFS = { payee: pr.payee || {}, tx: pr.tx || {} };
+  const [st, pr, lg] = await Promise.all([store.statements(), store.prefs(), store.ledger()]);
+  STMTS = st; PREFS = { payee: pr.payee || {}, tx: pr.tx || {} }; LEDGER = lg;
   $('gate').hidden = true; $('app').hidden = false;
   rebuild();
   if (!MONTHS.length) show('statements');
@@ -84,11 +89,11 @@ function rebuild() {
   const m = new Map();
   for (const s of STMTS) for (const t of s.txns) if (!m.has(t.id)) m.set(t.id, { ...t, acct: s.account.id, kind: s.kind });
   TX = [...m.values()].sort((a, b) => b.date.localeCompare(a.date) || a.amount - b.amount);
-  for (const t of TX) { t.cat = categorize(t, PREFS); t.group = GROUP_OF[t.cat] || 'review'; t.book = bookAmount(t, t.cat); }
-  // months the bank statements cover (the card's first statement starts a few days early)
+  for (const t of TX) { t.cat = categorize(t, PREFS); t.group = GROUP_OF[t.cat] || 'review'; t.book = bookAmount(t, t.cat); t.startup = startupAmount(t, t.cat); }
+  // months the bank statements cover, from the month the cafe opened (earlier = Startup tab)
   const cov = new Set();
   for (const s of STMTS.filter(s => s.kind === 'bank')) { cov.add(s.start.slice(0, 7)); cov.add(s.end.slice(0, 7)); }
-  MONTHS = [...cov].sort();
+  MONTHS = [...cov].filter(m => m >= OPEN_DATE.slice(0, 7)).sort();
   const opts = [...MONTHS].reverse().map(m => [m, mName(m, true)]);
   if (MONTHS.length > 1) opts.unshift(['last3', 'Last 3 months'], ['ytd', 'Year to date'], ['all', 'All months']);
   if (!PERIOD || !opts.some(o => o[0] === PERIOD)) PERIOD = MONTHS.length ? MONTHS[MONTHS.length - 1] : null;
@@ -102,7 +107,8 @@ function periodMonths(p = PERIOD) {
   if (p === 'ytd') { const y = MONTHS[MONTHS.length - 1].slice(0, 4); return MONTHS.filter(m => m.startsWith(y)); }
   return [p];
 }
-const inMonths = ms => t => ms.includes(t.date.slice(0, 7));
+// operating-period transactions in these months (days before opening belong to the Startup tab)
+const inMonths = ms => t => t.date >= OPEN_DATE && ms.includes(t.date.slice(0, 7));
 function totals(ms) {
   const tx = TX.filter(inMonths(ms)), g = k => sum(tx.filter(t => t.group === k), t => t.book);
   const r = { revenue: g('revenue'), cogs: g('cogs'), labor: g('labor'), operating: g('operating'), tax: g('tax') };
@@ -128,7 +134,7 @@ function render() {
   const rv = TX.filter(t => t.group === 'review').length;
   $('reviewCount').hidden = !rv; $('reviewCount').textContent = rv;
   if (!PERIOD) { renderStatements(); return; }
-  ({ overview: renderOverview, expenses: renderExpenses, txns: renderTxns, review: renderReview, statements: renderStatements })[VIEW]();
+  ({ overview: renderOverview, expenses: renderExpenses, txns: renderTxns, review: renderReview, startup: renderStartup, statements: renderStatements })[VIEW]();
 }
 function show(v) {
   VIEW = v;
@@ -172,6 +178,7 @@ function renderOverview() {
   monthChart();
   cardDebt();
   ownerMoney();
+  cashBridge();
   const all = MONTHS.map(m => [m, totals([m])]), sel = new Set(ms);
   const cell = v => `<td class="n${v < 0 ? ' neg' : ''}">${money(v)}</td>`;
   $('plTable').innerHTML = `<tr><th>Month</th><th class="n">Revenue</th><th class="n">Cost of goods</th><th class="n">Labor</th><th class="n">Operating</th><th class="n">Profit</th><th class="n">Margin</th><th class="n">Taxes</th></tr>` +
@@ -181,40 +188,75 @@ function renderOverview() {
 }
 function pick(m) { PERIOD = m; $('period').value = m; render(); }
 
-// Owner money over all statements: loans the business still owes back, money invested, draws taken
-function ownerMoney() {
-  const own = TX.filter(t => t.group === 'owner' || t.cat === 'Owner money (assign)').sort((a, b) => a.date.localeCompare(b.date));
-  const loans = own.filter(t => t.cat === 'Owner loan / repayment'), open = own.filter(t => t.cat === 'Owner money (assign)');
-  const lent = sum(loans.filter(t => t.amount > 0), t => t.amount), repaid = -sum(loans.filter(t => t.amount < 0), t => t.amount);
-  const inv = sum(own.filter(t => t.cat === 'Owner investment'), t => t.amount), draws = -sum(own.filter(t => t.cat === 'Owner draw'), t => t.amount);
-  $('ownerSummary').innerHTML = `The business still owes you <b>${money(lent - repaid, 2)}</b>: you lent ${money(lent, 2)} and it has paid back ${money(repaid, 2)}.` +
-    (inv ? ` Invested (not paid back): ${money(inv, 2)}.` : '') + (draws ? ` Draws taken: ${money(draws, 2)}.` : '') +
-    (open.length ? ` <span class="bad">${open.length} transfer${open.length > 1 ? 's' : ''} with your other account still need${open.length > 1 ? '' : 's'} a label</span> (loan, investment or draw) in Needs review.` : '');
-  $('ownerTable').innerHTML = own.length ? `<tr><th>Date</th><th>What</th><th class="n">In</th><th class="n">Out</th></tr>` +
-    own.map(t => `<tr><td>${dName(t.date)}, ${t.date.slice(0, 4)}</td><td>${esc(t.cat)}<div class="desc">${esc(t.desc)}</div></td><td class="n">${t.amount > 0 ? money(t.amount, 2) : ''}</td><td class="n">${t.amount < 0 ? money(-t.amount, 2) : ''}</td></tr>`).join('') : '<tr><td class="note">No owner money yet.</td></tr>';
+// Why profit isn't the bank balance: everything that moved the bank, from the day the account
+// opened to the latest bank statement, grouped so the steps add up to the statement's balance
+function cashBridge() {
+  const bankSt = STMTS.filter(s => s.kind === 'bank').sort((a, b) => a.end.localeCompare(b.end)), last = bankSt[bankSt.length - 1];
+  if (!last) { $('bridgeTable').innerHTML = ''; return; }
+  const tx = TX.filter(t => t.date <= last.end), s = f => sum(tx.filter(f), t => t.amount);
+  const startBal = bankSt[0].opening || 0;
+  const op = t => t.date >= OPEN_DATE;
+  const profit = s(t => op(t) && ['revenue', 'cogs', 'labor', 'operating'].includes(t.group));
+  const partners = s(t => t.group === 'owner');
+  const startup = s(t => Math.abs(t.startup) > 0.004);
+  const tax = s(t => op(t) && t.group === 'tax');
+  const review = s(t => t.group === 'review');
+  const transfer = s(t => t.group === 'transfer');
+  const card = s(t => t.kind === 'card');
+  const all = s(() => true), other = all - profit - partners - startup - tax - review - transfer;
+  const bank = startBal + all - card;                       // the card's own entries never touch the bank
+  const rows = [
+    ['Profit since opening', profit, 'sales minus expenses'],
+    ["Partners' money", partners, 'investments and loans in, less anything paid back or drawn'],
+    ['Startup costs', startup, 'building the café, before opening'],
+    ['Taxes paid', tax, 'sales tax and other taxes: never part of profit'],
+    ['Not yet labelled', review, 'checks and cash withdrawals: label them in Needs review'],
+    ['Card bill not yet paid', -card + transfer, 'expenses already counted, cash still in the bank until you pay the card'],
+    ...(Math.abs(other) > 0.5 ? [['Other', other, 'income or refunds before opening, personal items']] : []),
+    ...(startBal ? [['Starting balance', startBal, '']] : []),
+  ];
+  $('bridgeTable').innerHTML = rows.map(([l, v, n]) => `<tr><td>${l}<div class="desc">${n}</div></td><td class="n${v < 0 ? ' neg' : ''}">${v >= 0 ? '+' : ''}${money(v, 2)}</td></tr>`).join('') +
+    `<tr><td><b>Bank balance on ${dName(last.end)}, ${last.end.slice(0, 4)}</b></td><td class="n"><b>${money(bank, 2)}</b>${Math.abs(bank - last.ending) < 0.01 ? ' <span class="ok">✓ matches the statement</span>' : ` <span class="bad">statement says ${money(last.ending, 2)}</span>`}</td></tr>`;
 }
 
-// The card started 2026 carrying construction-era debt. Paying the card is never an expense
-// (that would count purchases twice, or count 2025 construction as 2026 costs), so this panel
+// Loans partners made to the business: what is still owed to each (Overview panel)
+function ownerMoney() {
+  const loans = TX.filter(t => t.group === 'owner' && isLoan(t.cat)).sort((a, b) => a.date.localeCompare(b.date));
+  const open = TX.filter(t => t.cat === 'Owner money (assign)');
+  const by = {};
+  for (const t of loans) { const p = partnerOf(t.cat) || 'Unnamed partner'; by[p] = by[p] || { lent: 0, repaid: 0 }; if (t.amount > 0) by[p].lent += t.amount; else by[p].repaid -= t.amount; }
+  const owed = Object.entries(by).filter(([, v]) => Math.abs(v.lent - v.repaid) > 0.004);
+  $('ownerSummary').innerHTML = (owed.length ? 'The business still owes ' + owed.map(([p, v]) => `<b>${esc(p)} ${money(v.lent - v.repaid, 2)}</b> (lent ${money(v.lent, 2)}, paid back ${money(v.repaid, 2)})`).join('; ') + '.'
+    : 'The business owes no partner loans right now.') +
+    ' What each partner invested is on the Startup &amp; partners tab.' +
+    (open.length ? ` <span class="bad">${open.length} transfer${open.length > 1 ? 's' : ''} with a partner's account still need${open.length > 1 ? '' : 's'} a label</span> in Needs review.` : '');
+  $('ownerTable').innerHTML = loans.length ? `<tr><th>Date</th><th>Partner</th><th class="n">Lent</th><th class="n">Paid back</th></tr>` +
+    loans.map(t => `<tr><td>${dName(t.date)}, ${t.date.slice(0, 4)}</td><td>${esc(partnerOf(t.cat) || '–')}</td><td class="n">${t.amount > 0 ? money(t.amount, 2) : ''}</td><td class="n">${t.amount < 0 ? money(-t.amount, 2) : ''}</td></tr>`).join('') : '<tr><td class="note">No partner loans.</td></tr>';
+}
+
+// The card carried build-out spending into the opening. Paying the card is never an expense
+// (that would count purchases twice, or count startup costs as monthly costs), so this panel
 // shows the debt itself: balance per statement, new spending, payments, and the equipment plan.
 function cardDebt() {
   const st = STMTS.filter(s => s.kind === 'card').sort((a, b) => a.start.localeCompare(b.start));
   if (!st.length) { $('debtSummary').textContent = 'Upload credit card statements to see the card balance.'; $('debtTable').innerHTML = ''; return; }
-  const first = st[0], last = st[st.length - 1];
+  const last = st[st.length - 1];
+  const atOpen = st.find(s => s.end >= OPEN_DATE) || st[0];        // first statement closing after opening
+  const since = st.filter(s => s.start > atOpen.end);
   const spent = s => sum(s.txns.filter(t => t.amount < 0), t => -t.amount);
   const paid = s => sum(s.txns.filter(t => t.section === 'card-payment'), t => t.amount);
-  const planNow = last.plan ? last.plan.remaining : 0;
+  const firstPlan = st.find(s => s.plan), planNow = last.plan ? last.plan.remaining : 0;
   const paidOff = st.find(s => s.plan && s.plan.remaining === 0);
   const interest = sum(st, s => s.interest || 0);
-  const open = first.opening ?? null, close = last.ending;
-  $('debtSummary').innerHTML = (open != null ? `The card started at <b>${money(open, 2)}</b> on ${dName(first.start)}, ${first.start.slice(0, 4)} (construction-era spending) and was <b>${money(close, 2)}</b> on ${dName(last.end)}, ${last.end.slice(0, 4)}: ` +
-    (open > close ? `<span class="ok">${money(open - close, 2)} paid down</span>.` : `<span class="bad">${money(close - open, 2)} higher</span>.`) : '') +
-    ` Since then you paid ${money(sum(st, paid), 2)} to the card and spent ${money(sum(st, spent), 2)} on it. That spending is already in Expenses.` +
-    (first.plan ? ` The ${money(first.plan.original, 2)} equipment plan (Pay Over Time) had ${money(first.plan.remaining, 2)} left after the first statement` +
-      (paidOff ? ` and was <span class="ok">paid off by ${dName(paidOff.end)}</span>.` : `; ${money(planNow, 2)} is left.`) : '') +
+  const open = atOpen.ending, close = last.ending;
+  $('debtSummary').innerHTML = `Around opening (${dName(atOpen.end)}, ${atOpen.end.slice(0, 4)}) the card owed <b>${money(open, 2)}</b>, mostly build-out purchases. On ${dName(last.end)}, ${last.end.slice(0, 4)} it owed <b>${money(close, 2)}</b>: ` +
+    (open > close ? `<span class="ok">${money(open - close, 2)} paid down</span>.` : `<span class="bad">${money(close - open, 2)} higher</span>.`) +
+    (since.length ? ` Since then you paid ${money(sum(since, paid), 2)} to the card and spent ${money(sum(since, spent), 2)} on it; that spending is already in Expenses.` : '') +
+    (firstPlan ? ` The ${money(firstPlan.plan.original, 2)} equipment plan (Pay Over Time)` +
+      (paidOff ? ` was <span class="ok">paid off by ${dName(paidOff.end)}, ${paidOff.end.slice(0, 4)}</span>.` : ` has ${money(planNow, 2)} left.`) : '') +
     (interest > 0 ? ` Interest charged so far: <span class="bad">${money(interest, 2)}</span>.` : '');
   $('debtTable').innerHTML = `<tr><th>Statement</th><th class="n">New spending</th><th class="n">Paid</th><th class="n">Interest</th><th class="n">Equipment plan left</th><th class="n">Balance owed</th></tr>` +
-    st.map(s => `<tr><td>${dName(s.start)} – ${dName(s.end)}</td><td class="n">${money(spent(s), 2)}</td><td class="n">${money(paid(s), 2)}</td><td class="n">${s.interest ? money(s.interest, 2) : '–'}</td><td class="n">${s.plan ? money(s.plan.remaining, 2) : '–'}</td><td class="n"><b>${money(s.ending, 2)}</b></td></tr>`).join('');
+    st.map(s => `<tr${s === atOpen ? ' class="sel"' : ''}><td>${dName(s.start)} – ${dName(s.end)}, ${s.end.slice(0, 4)}</td><td class="n">${money(spent(s), 2)}</td><td class="n">${money(paid(s), 2)}</td><td class="n">${s.interest ? money(s.interest, 2) : '–'}</td><td class="n">${s.plan ? money(s.plan.remaining, 2) : '–'}</td><td class="n"><b>${money(s.ending, 2)}</b></td></tr>`).join('');
 }
 
 // grouped bars: revenue and expenses per month, one $ axis
@@ -328,6 +370,130 @@ function renderReview() {
   if (!list.length) { $('reviewTable').innerHTML = '<tr><td class="note">Nothing to review. Everything has a category.</td></tr>'; return; }
   txRows($('reviewTable'), list, { rule: true });
 }
+
+// ---------- startup & partners ----------
+// Startup costs come from the statements (everything spent before opening, plus startup
+// categories later). What partners paid out of their own pockets is not in any statement,
+// so it comes from the partners' workbook, imported once and re-imported when it changes.
+function partnerTotals() {
+  const P = {}, row = p => P[p] = P[p] || { bank: 0, bankBefore: 0, bankAfter: 0, personal: 0, lent: 0, repaid: 0, draws: 0, wbDeposits: 0 };
+  PARTNERS.forEach(row);
+  for (const t of TX.filter(t => t.group === 'owner')) {
+    const p = partnerOf(t.cat) || 'Unnamed partner'; row(p);
+    if (/investment$/.test(t.cat)) { P[p].bank += t.amount; if (t.date < OPEN_DATE) P[p].bankBefore += t.amount; else P[p].bankAfter += t.amount; }
+    else if (isLoan(t.cat)) { if (t.amount > 0) P[p].lent += t.amount; else P[p].repaid -= t.amount; }
+    else if (/draw$/.test(t.cat)) P[p].draws -= t.amount;
+  }
+  for (const r of (LEDGER && LEDGER.rows) || []) {
+    if (!r.partner) continue; row(r.partner);
+    if (r.kind === 'paid') P[r.partner].personal += r.amount;
+    if (r.kind === 'deposit') P[r.partner].wbDeposits += r.amount;
+  }
+  return P;
+}
+function renderStartup() {
+  const pre = TX.filter(t => Math.abs(t.startup) > 0.004);
+  const total = sum(pre, t => t.startup), deposit = sum(pre.filter(t => t.cat === 'Lease security deposit'), t => t.startup);
+  const rows = (LEDGER && LEDGER.rows) || [];
+  const personal = sum(rows.filter(r => r.kind === 'paid'), r => r.amount), cash = sum(rows.filter(r => r.kind === 'cash'), r => r.amount);
+  const P = partnerTotals(), bankIn = sum(Object.values(P), v => v.bank);
+  const review = TX.filter(t => t.date < OPEN_DATE && t.group === 'review');
+  const tile = (l, v, d) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+  $('suKpis').innerHTML =
+    tile('Cost to open', money(total + personal + cash), `opened ${dName(OPEN_DATE)}, ${OPEN_DATE.slice(0, 4)}`) +
+    tile("Paid from the café's account & card", money(total), 'before opening' + (deposit ? `; includes ${money(deposit)} lease deposit` : '')) +
+    tile('Paid by partners personally', LEDGER ? money(personal + cash) : '–', LEDGER ? 'from the workbook' : 'import the workbook below') +
+    tile('Partners put in (bank)', money(bankIn), 'deposits, wires and transfers') +
+    (review.length ? tile('Still to label', String(review.length), `${money(sum(review, t => Math.abs(t.amount)))} before opening, in Needs review`) : '');
+
+  // startup costs by category
+  const by = {};
+  for (const t of pre) by[t.cat] = (by[t.cat] || 0) + t.startup;
+  const cats = Object.entries(by).filter(([, v]) => Math.abs(v) > 0.004).sort((a, b) => b[1] - a[1]), max = Math.max(1, ...cats.map(c => c[1]));
+  $('suBars').innerHTML = cats.length ? cats.map(([c, v]) =>
+    `<div class="hbar${c === SCAT ? ' sel' : ''}" data-c="${esc(c)}" role="button" tabindex="0"><span>${esc(c)}</span><div class="track"><div class="fill" style="width:${Math.max(0.5, v / max * 100)}%"></div></div><span class="amt">${money(v)}</span></div>`).join('')
+    : '<p class="note">No startup spending in the statements yet.</p>';
+  $('suBars').querySelectorAll('.hbar').forEach(b => b.onclick = b.onkeydown = e => { if (e.type === 'keydown' && e.key !== 'Enter') return; SCAT = b.dataset.c; renderStartup(); });
+  if (SCAT && by[SCAT]) { $('suDetail').hidden = false; $('suDetailTitle').textContent = `${SCAT} · ${money(by[SCAT], 2)}`; txRows($('suTx'), pre.filter(t => t.cat === SCAT)); }
+  else $('suDetail').hidden = true;
+
+  // partners: with the workbook, its deposits + personal payments (the partners' own record) plus
+  // money added after opening from the bank; without it, only what the bank shows
+  const names = Object.keys(P), commit = (LEDGER && LEDGER.commit) || {};
+  const net = v => LEDGER ? v.wbDeposits + v.personal + v.bankAfter + (v.lent - v.repaid) - v.draws : v.bank + (v.lent - v.repaid) - v.draws;
+  const c2 = v => `<td class="n">${money(v, 2)}</td>`, tot = k => sum(names, p => P[p][k]);
+  const diff = p => commit[p] ? net(P[p]) - (P[p].lent - P[p].repaid) - commit[p] : null;   // loans don't count toward the commitment
+  $('partnerTable').innerHTML = LEDGER
+    ? `<tr><th>Partner</th><th class="n">Committed</th><th class="n">Deposited (workbook)</th><th class="n">Paid personally (workbook)</th><th class="n">Added since opening (bank)</th><th class="n">Loan still owed</th><th class="n">Total put in</th><th class="n">vs commitment</th></tr>` +
+      names.map(p => { const v = P[p], d = diff(p); return `<tr><td>${esc(p)}</td><td class="n">${commit[p] ? money(commit[p]) : '–'}</td>${c2(v.wbDeposits)}${c2(v.personal)}${c2(v.bankAfter)}${c2(v.lent - v.repaid)}<td class="n"><b>${money(net(v), 2)}</b></td><td class="n">${d == null ? '–' : `<span class="${d >= 0 ? 'ok' : 'bad'}">${d >= 0 ? money(d, 2) + ' over' : money(-d, 2) + ' short'}</span>`}</td></tr>`; }).join('') +
+      `<tr><td><b>All partners</b></td><td class="n"><b>${money(sum(names, p => commit[p] || 0))}</b></td>${['wbDeposits', 'personal', 'bankAfter'].map(k => `<td class="n"><b>${money(tot(k), 2)}</b></td>`).join('')}<td class="n"><b>${money(sum(names, p => P[p].lent - P[p].repaid), 2)}</b></td><td class="n"><b>${money(sum(names, p => net(P[p])), 2)}</b></td><td></td></tr>`
+    : `<tr><th>Partner</th><th class="n">Into the bank</th><th class="n">Loan still owed</th><th class="n">Total put in</th></tr>` +
+      names.map(p => { const v = P[p]; return `<tr><td>${esc(p)}</td>${c2(v.bank)}${c2(v.lent - v.repaid)}<td class="n"><b>${money(net(v), 2)}</b></td></tr>`; }).join('');
+  // the workbook's deposits vs what reached the bank before opening, so differences are easy to spot
+  $('partnerCheck').innerHTML = LEDGER ? 'Check, deposits before opening, workbook vs bank: ' + names.filter(p => P[p].wbDeposits || P[p].bankBefore).map(p => {
+    const d = P[p].wbDeposits - P[p].bankBefore; return `${esc(p)} ${money(P[p].wbDeposits)} vs ${money(P[p].bankBefore)}${Math.abs(d) > 0.5 ? ` <span class="bad">(${money(Math.abs(d))} ${d > 0 ? 'not seen in the bank' : 'more in the bank'})</span>` : ' <span class="ok">✓</span>'}`; }).join(' · ') +
+    '. A deposit "not seen in the bank" may have gone straight to a contractor or be recorded under another name.' : 'Import the workbook to add commitments and what each partner paid personally.';
+
+  // workbook rows, per partner
+  $('ledgerMsg').textContent = LEDGER ? `Imported ${LEDGER.file}: ${rows.length} rows on ${dName(LEDGER.importedAt.slice(0, 10))}, ${LEDGER.importedAt.slice(0, 4)}.` : 'Not imported yet.';
+  const groups = [...PARTNERS.map(p => [p, rows.filter(r => r.partner === p && r.kind === 'paid')]), ['Café cash', rows.filter(r => r.kind === 'cash')]].filter(([, l]) => l.length);
+  $('ledgerDetail').innerHTML = groups.map(([p, l]) => `<details><summary>${esc(p)}: ${l.length} payments, ${money(sum(l, r => r.amount), 2)}</summary><div class="scroll"><table><tr><th>Date</th><th>What</th><th class="n">Amount</th><th>Note</th></tr>${
+    l.map(r => `<tr><td>${r.date ? dName(r.date) + ', ' + r.date.slice(0, 4) : '–'}</td><td>${esc(r.purpose)}</td><td class="n">${money(r.amount, 2)}</td><td class="desc">${esc(r.comments)}</td></tr>`).join('')}</table></div></details>`).join('');
+}
+
+let XLSX = null;
+async function getXlsx() {
+  if (!XLSX) {
+    await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload = res; s.onerror = () => rej(new Error('Could not load the spreadsheet reader')); document.head.appendChild(s); });
+    XLSX = window.XLSX;
+  }
+  return XLSX;
+}
+const isoLocal = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+// First sheet, header row with Name / Purpose / (Date) / Amount / Deposits / Not paid / Comments.
+// Partner rows: Amount = paid personally, Deposits = money put into the bank. "… Cash" rows were paid
+// from the café's cash. Business rows (e.g. Musche LLC) are skipped: those are in the statements.
+// Names are trimmed, so "Scherize Hamirani " with a trailing space still counts as Scherize.
+// If the sheet has the Partners / Deposits+payments / "Amount to Deposit More" summary, each
+// partner's commitment is read from it (total + amount still to deposit).
+function parseLedger(X, wb) {
+  const grid = X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, blankrows: false });
+  const hi = grid.findIndex(r => r.some(v => /^name$/i.test(String(v ?? '').trim())) && r.some(v => /^amount$/i.test(String(v ?? '').trim())));
+  if (hi < 0) throw new Error('The first sheet needs a header row with "Name" and "Amount".');
+  const H = grid[hi].map(v => String(v ?? '').trim().toLowerCase()), col = n => H.findIndex(h => h.startsWith(n));
+  const c = { name: col('name'), purpose: col('purpose'), date: col('date'), amount: col('amount'), deposit: H.findIndex(h => h === 'deposits' || h === 'deposit'), comments: col('comment'),
+    partners: col('partners'), total: col('deposits+payments'), more: col('amount to deposit') };
+  const commit = {};
+  if (c.partners >= 0 && c.total >= 0 && c.more >= 0) for (const r of grid.slice(hi + 1)) {
+    const p = PARTNERS.find(p => p.toLowerCase() === String(r[c.partners] ?? '').trim().split(/\s+/)[0].toLowerCase());
+    const t = Number(r[c.total]), m = Number(r[c.more]);
+    if (p && isFinite(t) && isFinite(m)) commit[p] = Math.round((t + m) * 100) / 100;
+  }
+  const rows = [];
+  for (const r of grid.slice(hi + 1)) {
+    const name = String(r[c.name] ?? '').trim(); if (!name) continue;
+    const partner = PARTNERS.find(p => p.toLowerCase() === name.split(/\s+/)[0].toLowerCase()) || '';
+    const cash = !partner && /cash/i.test(name);
+    const d = c.date >= 0 ? r[c.date] : null;
+    const base = { name, partner, purpose: String(r[c.purpose] ?? '').trim(), date: d instanceof Date ? isoLocal(d) : '', comments: c.comments >= 0 ? String(r[c.comments] ?? '').trim() : '' };
+    const amt = Number(r[c.amount]), dep = c.deposit >= 0 ? Number(r[c.deposit]) : NaN;
+    if (amt && isFinite(amt) && (partner || cash)) rows.push({ ...base, amount: amt, kind: partner ? 'paid' : 'cash' });
+    if (dep && isFinite(dep) && partner) rows.push({ ...base, amount: dep, kind: 'deposit' });
+  }
+  return { rows, commit };
+}
+$('ledgerFile').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f || RO) return;
+  $('ledgerMsg').textContent = `Reading ${f.name}…`;
+  try {
+    const X = await getXlsx(), { rows, commit } = parseLedger(X, X.read(await f.arrayBuffer(), { type: 'array', cellDates: true }));
+    if (!rows.length) throw new Error('No partner rows found. Names should start with ' + PARTNERS.join(', ') + '.');
+    LEDGER = { file: f.name, importedAt: new Date().toISOString(), rows, commit };
+    await store.saveLedger(LEDGER);
+    renderStartup();
+  } catch (err) { $('ledgerMsg').textContent = 'Not imported: ' + (err.code || err.message); }
+};
 
 // ---------- statements: upload + list ----------
 let pdfjs = null;

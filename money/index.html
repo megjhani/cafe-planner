@@ -89,7 +89,9 @@ tr.click:hover td{background:var(--bg)}
 .cat{max-width:210px}
 /* view-only owners: categories can't be changed, statements can't be added or removed */
 body.ro :is(select.cat,input[data-rule]){pointer-events:none;opacity:.75}
-body.ro :is(#uploadPanel,[data-rm]){display:none!important}
+body.ro :is(#uploadPanel,[data-rm],#ledgerUpload){display:none!important}
+details{border-top:1px solid var(--line);padding:8px 0}
+summary{cursor:pointer;font-weight:600}
 </style>
 </head>
 <body>
@@ -122,6 +124,7 @@ body.ro :is(#uploadPanel,[data-rm]){display:none!important}
     <button class="tab" data-v="expenses">Expenses</button>
     <button class="tab" data-v="txns">Transactions</button>
     <button class="tab" data-v="review">Needs review<span class="badge" id="reviewCount" hidden></span></button>
+    <button class="tab" data-v="startup">Startup &amp; partners</button>
     <button class="tab" data-v="statements">Statements</button>
   </nav>
 
@@ -145,10 +148,15 @@ body.ro :is(#uploadPanel,[data-rm]){display:none!important}
       <div class="scroll"><table id="plTable"></table></div>
     </section>
     <section class="panel">
-      <h2>Owed to owners</h2>
+      <h2>From profit to bank balance</h2>
+      <p class="note">Profit isn't the cash in the bank. These steps show where the difference comes from, since the account opened.</p>
+      <div class="scroll"><table id="bridgeTable"></table></div>
+    </section>
+    <section class="panel">
+      <h2>Owed to partners</h2>
       <p class="note" id="ownerSummary" style="font-size:.9rem;color:var(--fg)"></p>
       <div class="scroll"><table id="ownerTable"></table></div>
-      <p class="note">Money you move in from your own account is a loan (the business pays it back), an investment (it stays in) or, going out, a draw. None of it is revenue or expense. Label each one in Needs review.</p>
+      <p class="note">A partner's money is a loan (the business pays it back), an investment (it stays in) or, going out, a draw. None of it is revenue or expense.</p>
     </section>
     <section class="panel">
       <h2>Credit card debt</h2>
@@ -184,6 +192,33 @@ body.ro :is(#uploadPanel,[data-rm]){display:none!important}
     <h2>Needs review</h2>
     <p class="note">Chase doesn't say who a check was written to, or what cash or a branch deposit was for. Pick a category for each one. Tick "all from this payee" to set a rule for every future transaction from the same place.</p>
     <div class="scroll"><table id="reviewTable"></table></div>
+  </section>
+
+  <section id="v-startup" class="view" hidden style="display:grid;gap:18px">
+    <p class="note" style="font-size:.9rem">Everything before the café opened is <b>startup</b>: construction, equipment, licenses and the lease deposit. It's the cost of building the café, so it's kept here and never counted in monthly profit. Partners' money is investment (or a loan), not revenue.</p>
+    <div class="kpis" id="suKpis"></div>
+    <section class="panel">
+      <h2>Partners</h2>
+      <div class="scroll"><table id="partnerTable"></table></div>
+      <p class="note" id="partnerCheck"></p>
+      <p class="note">Into the bank: deposits, wires and transfers labelled with the partner's name. Paid personally: from the workbook. Loans are paid back; investment stays in.</p>
+    </section>
+    <section class="panel">
+      <div class="row between"><h2>Startup costs paid from the café's account &amp; card</h2><span class="note">Click a category</span></div>
+      <div id="suBars"></div>
+      <p class="note">From the bank and card statements. To move something in or out of startup, change its category in Transactions or Needs review.</p>
+    </section>
+    <section class="panel" id="suDetail" hidden>
+      <h2 id="suDetailTitle"></h2>
+      <div class="scroll"><table id="suTx"></table></div>
+    </section>
+    <section class="panel">
+      <div class="row between"><h2>What partners paid personally (workbook)</h2>
+        <label class="btn" id="ledgerUpload" for="ledgerFile" style="cursor:pointer">Import workbook (.xlsx)<input type="file" id="ledgerFile" accept=".xlsx,.xls" hidden></label></div>
+      <p class="note" id="ledgerMsg"></p>
+      <div id="ledgerDetail"></div>
+      <p class="note">Uses the first sheet: Name, Purpose, Date, Amount, Deposits, Comments. Rows for a partner count as paid personally (Amount) or deposited (Deposits). "Cash" rows were paid from the café's cash. Business rows are skipped because they're already in the statements. Import again whenever you update the workbook.</p>
+    </section>
   </section>
 
   <section id="v-statements" class="view" hidden style="display:grid;gap:18px">

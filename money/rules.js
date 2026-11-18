@@ -6,16 +6,30 @@
 //   labor      payroll and payroll taxes
 //   operating  everything else it costs to run the cafe
 //   tax        sales tax and other tax payments (shown apart from profit)
+//   startup    building the cafe: construction, equipment, lease deposit. Never in monthly profit;
+//              shown on the Startup & partners tab
 //   transfer   money moving between your own accounts, e.g. paying the credit card: never counted
-//   owner      money you lend, invest or take out: never counted, tracked as "owed to owners"
+//   owner      money a partner puts in, lends or takes out: never counted, tracked per partner
 //   personal   not the business: never counted
 //   review     needs you to say what it is (checks, cash withdrawals, unknown)
 // A refund (money coming back) in an expense category lowers that category.
+//
+// Everything dated before OPEN_DATE is the startup phase: it never counts in monthly profit,
+// whatever its category, and is totalled on the Startup & partners tab instead.
+
+export const OPEN_DATE = '2025-12-13';      // the cafe opened
+export const PARTNERS = ['Murad', 'Scherize', 'Altaf'];
 
 export const GROUPS = {
   revenue: 'Revenue', cogs: 'Cost of goods', labor: 'Labor', operating: 'Operating',
-  tax: 'Taxes', transfer: 'Transfers (not counted)', owner: 'Owner money (not counted)', personal: 'Personal (not counted)', review: 'Needs review',
+  tax: 'Taxes', startup: 'Startup & build-out', transfer: 'Transfers (not counted)',
+  owner: 'Partner money (not counted)', personal: 'Personal (not counted)', review: 'Needs review',
 };
+
+// a partner's money: "investment" stays in the business, "loan / repayment" is paid back
+// (in = lent, out = repaid), "draw" is money taken out as the partner's share
+export const partnerCat = (p, kind) => `${p} · ${kind}`;
+const PARTNER_KINDS = ['investment', 'loan / repayment', 'draw'];
 
 export const CATEGORIES = [
   ['Card sales (Clover)', 'revenue'],
@@ -45,8 +59,13 @@ export const CATEGORIES = [
   ['Other expense', 'operating'],
   ['Sales tax', 'tax'],
   ['Income & other taxes', 'tax'],
+  ['Construction & build-out', 'startup'],
+  ['Equipment & furniture', 'startup'],
+  ['Licenses, permits & insurance', 'startup'],
+  ['Lease security deposit', 'startup'],
   ['Credit card payment', 'transfer'],
-  // owner money: in = you lent or put money into the business, out = it paid you back or you took it out
+  ...PARTNERS.flatMap(p => PARTNER_KINDS.map(k => [partnerCat(p, k), 'owner'])),
+  // older labels without a partner name, kept so earlier choices still work
   ['Owner loan / repayment', 'owner'],
   ['Owner investment', 'owner'],
   ['Owner draw', 'owner'],
@@ -59,16 +78,25 @@ export const CATEGORIES = [
 ].map(([name, group]) => ({ name, group }));
 export const GROUP_OF = Object.fromEntries(CATEGORIES.map(c => [c.name, c.group]));
 
+// which partner a partner-money category belongs to ('' for the older unnamed ones)
+export const partnerOf = cat => (cat.match(/^(\w+) · /) || [])[1] || '';
+export const isLoan = cat => /loan \/ repayment$/.test(cat);
+
 // [pattern tested on "payee | description", category]. First match wins.
 const RULES = [
-  // transfers first: card payments seen from both sides, and moves between your own accounts
+  // transfers first: card payments seen from both sides
   [/Chase Credit Crd|Payment To Chase Card|AUTOMATIC PAYMENT|Payment Thank You/i, 'Credit card payment'],
-  // your own account: a loan, an investment or a draw; you say which (see KNOWN and Needs review)
+  // partners: Murad's personal account (…XXXX) and the partners' own wires in
+  [/Online Transfer From Chk \.\.\.XXXX/i, partnerCat('Murad', 'investment')],
   [/Online Transfer (From|To) Chk/i, 'Owner money (assign)'],
+  [/B\/O:.*Murad/i, partnerCat('Murad', 'investment')],
+  [/B\/O:.*Altaf/i, partnerCat('Altaf', 'investment')],
+  [/B\/O:.*(Scherize|Hamirani)/i, partnerCat('Scherize', 'investment')],
   // revenue
-  [/Merch Bnkcd.*· Deposit/i, 'Card sales (Clover)'],
+  [/Merch Bnkcd.*· Deposit|First Data Rapid Depos/i, 'Card sales (Clover)'],
   [/Doordash, Inc|Uber USA 6787|Grubhub/i, 'Delivery apps'],
   [/Uber USA, LLC.*Partner/i, 'Other income'],
+  [/STATEMENT CREDIT/i, 'Other income'],
   // processing fees (Clover's processor takes its discount, fees and adjustments out of the bank)
   [/Merch Bnkcd|Clover Fees|Cash Deposit Immediate/i, 'Card processing fees'],
   // labor
@@ -81,31 +109,55 @@ const RULES = [
   [/Allen House/i, 'Rent'],
   [/Con Ed|CONED|Spectrum|National Grid|Verizon|T-Mobile/i, 'Utilities & internet'],
   [/WCI|HAULING/i, 'Trash hauling'],
-  [/Uticafirst|Hartford|Insurance|NEXT INSUR/i, 'Insurance'],
+  [/Uticafirst|Hartford|Insurance|NEXT INSUR|Prism/i, 'Insurance'],
+  // equipment bought for the build-out
+  [/DRINKRIPPLES|MAJESTIC/i, 'Equipment & furniture'],
   // cost of goods
-  [/Odeko/i, 'Coffee & cafe supplies'],
+  [/Odeko|WB LAW COFFEE/i, 'Coffee & cafe supplies'],
   [/Patisserie|Proper Hospitali|Savor Sabor|Bakery|Restaurant Depot|Baldor|Sysco/i, 'Bakery & food suppliers'],
   [/Wine|Liquor|Spirits|Beer|Southern Glazer|Breakthru|Johnson Brothers/i, 'Alcohol & beverages'],
-  [/TRADER JOE|NUTS FACTORY|WHOLEFDS|Amazon Groce|Amazon Grocery|INSTACART|ALDI|C-TOWN|FOODTOWN|APNA BAZAR|DASHMART|COSTCO|BJ'?S|KEY FOOD|STOP & SHOP/i, 'Groceries'],
+  [/TRADER JOE|NUTS FACTORY|WHOLEFDS|FRESHCO|Amazon Groce|Amazon Grocery|INSTACART|ALDI|C-TOWN|FOODTOWN|APNA BAZAR|DASHMART|COSTCO|BJ'?S|KEY FOOD|STOP & SHOP/i, 'Groceries'],
   // supplies & equipment
-  [/WEBSTAURANT|AMAZON|Amazon\.com|Prime Now|TOSSWARE|LOLLICUP|WAYFAIR|WF \*|TARGET|MARSHALLS|BRICKMAN|CVS|HOME DEPOT|STAPLES|IKEA/i, 'Supplies & equipment'],
+  [/WEBSTAURANT|AMAZON|Amazon\.com|Prime Now|TOSSWARE|LOLLICUP|WAYFAIR|WF \*|TARGET|MARSHALLS|BRICKMAN|CVS|HOME DEPOT|STAPLES|IKEA|Check OR Supply/i, 'Supplies & equipment'],
+  [/SPEEDY LOCK|Locksmith|Plumb|Electric/i, 'Repairs & maintenance'],
   [/Trivedi Law|\bCPA\b|Accounting|Legal/i, 'Legal & accounting'],
   [/VISTAPRINT|Facebk|Meta Ads|Google Ads|Yelp|Instagram/i, 'Marketing'],
   [/UBER|LYFT|MTA\*|EMPOWER|Via Transport/i, 'Travel & transport'],
   [/Sling|Hulu|Netflix|Spotify|Apple\.com|Google \*|Squarespace/i, 'Subscriptions'],
-  [/INTEREST CHARGE|LATE FEE|Service Fee|Monthly Service/i, 'Bank fees & interest'],
+  [/INTEREST CHARGE|LATE FEE|Service Fee|Monthly Service|Wire Fee|Night Drop/i, 'Bank fees & interest'],
+  [/Acctverify/i, 'Payroll taxes & fees'],
   [/DON CHICKEN|DOORDASH(?!.*DASHMART)|GRUBHUB|SEAMLESS/i, 'Other expense'],
 ];
 
-// category for a transaction: your choice for this transaction, else your rule for its payee,
-// else the built-in rules; checks and ATM withdrawals wait for you to assign them
-// Transactions the owner explained in person, matched by date + amount + text
+// Transactions the owners explained, matched by date + amount + text (Nov 2026, from Murad
+// and the partners' workbook "Musche Expenses and Deposits.xlsx")
 const KNOWN = [
-  // Murad lent the business $2,000 to cover April rent, then took $1,000 back (Nov 2026)
-  ['2026-04-03', 2000, /Online Transfer From Chk/i, 'Owner loan / repayment'],
-  ['2026-04-08', -1000, /Online Transfer To Chk/i, 'Owner loan / repayment'],
+  // partners' money in during setup
+  ['2025-06-23', 10000, /^Deposit \d/, partnerCat('Scherize', 'investment')],
+  ['2025-06-24', 9600, /^Deposit \d/, partnerCat('Scherize', 'investment')],
+  ['2025-06-24', 400, /^Deposit \d/, partnerCat('Scherize', 'investment')],
+  ['2025-06-27', 6000, /^Deposit \d/, partnerCat('Scherize', 'investment')],
+  ['2025-10-20', 2000, /ATM Cash Deposit/i, partnerCat('Scherize', 'investment')],
+  ['2025-12-10', 6000, /^Deposit \d/, partnerCat('Murad', 'investment')],
+  ['2026-02-06', 9500, /^Deposit \d/, partnerCat('Altaf', 'investment')],
+  // Murad lent the business $2,000 to cover April rent, then took $1,000 back
+  ['2026-04-03', 2000, /Online Transfer From Chk/i, partnerCat('Murad', 'loan / repayment')],
+  ['2026-04-08', -1000, /Online Transfer To Chk/i, partnerCat('Murad', 'loan / repayment')],
+  // setup spending
+  ['2025-06-25', -32000, /Check #7816/, 'Lease security deposit'],
+  ['2025-06-25', -8000, /Check #7817/, 'Lease security deposit'],
+  ['2025-07-02', -973, /Check #7818/, 'Licenses, permits & insurance'],     // Prism insurance
+  ['2025-10-22', -775, /Check #102\b/, 'Licenses, permits & insurance'],    // Prism, construction cover
+  ['2025-09-15', -14384.22, /WEBSTAURANT/i, 'Equipment & furniture'],        // equipment order (paid over time)
+  ['2025-10-01', -6000, /Check #101\b/, 'Construction & build-out'],         // HVAC
+  ['2025-10-14', -10000, /Withdrawal/i, 'Construction & build-out'],         // Lin, contractor
+  ['2025-10-31', -5000, /Withdrawal/i, 'Construction & build-out'],          // Lin, contractor
+  ['2025-11-04', -2100, /ATM Withdrawal/i, 'Construction & build-out'],      // Lin, bricks
 ];
 
+// category for a transaction: your choice for this transaction, else what the owners
+// explained, else your rule for its payee, else the built-in rules; checks, ATM cash and
+// branch deposits wait for you to assign them
 export function categorize(t, prefs = {}) {
   const byTx = prefs.tx || {}, byPayee = prefs.payee || {};
   if (byTx[t.id]) return byTx[t.id];
@@ -115,16 +167,28 @@ export function categorize(t, prefs = {}) {
   for (const [re, cat] of RULES) if (re.test(hay)) return cat;
   if (t.section === 'check') return 'Checks (assign)';
   if (t.section === 'atm' && /ATM Withdrawal/i.test(t.desc)) return 'Cash withdrawals (assign)';
-  // branch, cash or check deposits: could be sales, a loan or your own money
+  // branch, cash or check deposits: could be sales, a loan or a partner's money
   if (t.section === 'deposit') return 'Deposits (assign)';
   return 'Uncategorized';
 }
 
-// signed effect on the books: revenue positive, expenses positive, refunds negative.
-// Transfers, personal and items needing review return 0 (shown separately).
+// signed effect on monthly profit: revenue positive, expenses positive, refunds negative.
+// The startup phase, startup costs, transfers, partner money, personal and items needing
+// review return 0 (shown separately).
 export function bookAmount(t, cat) {
+  if (t.date < OPEN_DATE) return 0;
   const g = GROUP_OF[cat] || 'review';
   if (g === 'revenue') return t.amount;
+  if (g === 'cogs' || g === 'labor' || g === 'operating' || g === 'tax') return -t.amount;
+  return 0;
+}
+
+// cost of building the cafe: anything spent before opening (other than transfers, partner
+// money and personal) plus startup categories used after opening; refunds lower it
+export function startupAmount(t, cat) {
+  const g = GROUP_OF[cat] || 'review';
+  if (g === 'startup') return -t.amount;
+  if (t.date >= OPEN_DATE) return 0;
   if (g === 'cogs' || g === 'labor' || g === 'operating' || g === 'tax') return -t.amount;
   return 0;
 }
