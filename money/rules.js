@@ -7,13 +7,14 @@
 //   operating  everything else it costs to run the cafe
 //   tax        sales tax and other tax payments (shown apart from profit)
 //   transfer   money moving between your own accounts, e.g. paying the credit card: never counted
+//   owner      money you lend, invest or take out: never counted, tracked as "owed to owners"
 //   personal   not the business: never counted
 //   review     needs you to say what it is (checks, cash withdrawals, unknown)
 // A refund (money coming back) in an expense category lowers that category.
 
 export const GROUPS = {
   revenue: 'Revenue', cogs: 'Cost of goods', labor: 'Labor', operating: 'Operating',
-  tax: 'Taxes', transfer: 'Transfers (not counted)', personal: 'Personal (not counted)', review: 'Needs review',
+  tax: 'Taxes', transfer: 'Transfers (not counted)', owner: 'Owner money (not counted)', personal: 'Personal (not counted)', review: 'Needs review',
 };
 
 export const CATEGORIES = [
@@ -45,8 +46,12 @@ export const CATEGORIES = [
   ['Sales tax', 'tax'],
   ['Income & other taxes', 'tax'],
   ['Credit card payment', 'transfer'],
-  ['Owner transfers', 'transfer'],
+  // owner money: in = you lent or put money into the business, out = it paid you back or you took it out
+  ['Owner loan / repayment', 'owner'],
+  ['Owner investment', 'owner'],
+  ['Owner draw', 'owner'],
   ['Personal', 'personal'],
+  ['Owner money (assign)', 'review'],
   ['Deposits (assign)', 'review'],
   ['Checks (assign)', 'review'],
   ['Cash withdrawals (assign)', 'review'],
@@ -58,7 +63,8 @@ export const GROUP_OF = Object.fromEntries(CATEGORIES.map(c => [c.name, c.group]
 const RULES = [
   // transfers first: card payments seen from both sides, and moves between your own accounts
   [/Chase Credit Crd|Payment To Chase Card|AUTOMATIC PAYMENT|Payment Thank You/i, 'Credit card payment'],
-  [/Online Transfer (From|To) Chk/i, 'Owner transfers'],
+  // your own account: a loan, an investment or a draw; you say which (see KNOWN and Needs review)
+  [/Online Transfer (From|To) Chk/i, 'Owner money (assign)'],
   // revenue
   [/Merch Bnkcd.*· Deposit/i, 'Card sales (Clover)'],
   [/Doordash, Inc|Uber USA 6787|Grubhub/i, 'Delivery apps'],
@@ -93,9 +99,17 @@ const RULES = [
 
 // category for a transaction: your choice for this transaction, else your rule for its payee,
 // else the built-in rules; checks and ATM withdrawals wait for you to assign them
+// Transactions the owner explained in person, matched by date + amount + text
+const KNOWN = [
+  // Murad lent the business $2,000 to cover April rent, then took $1,000 back (Nov 2026)
+  ['2026-04-03', 2000, /Online Transfer From Chk/i, 'Owner loan / repayment'],
+  ['2026-04-08', -1000, /Online Transfer To Chk/i, 'Owner loan / repayment'],
+];
+
 export function categorize(t, prefs = {}) {
   const byTx = prefs.tx || {}, byPayee = prefs.payee || {};
   if (byTx[t.id]) return byTx[t.id];
+  for (const [d, a, re, cat] of KNOWN) if (t.date === d && Math.abs(t.amount - a) < 0.005 && re.test(t.desc)) return cat;
   if (byPayee[t.payee]) return byPayee[t.payee];
   const hay = `${t.payee} | ${t.desc}`;
   for (const [re, cat] of RULES) if (re.test(hay)) return cat;

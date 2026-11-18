@@ -35,6 +35,10 @@ window.LIVE = !!window.FIREBASE_CONFIG.apiKey;
   --extra:#b49be0; --warn:#f2867c; --warn-soft:#3f1d1a; color-scheme:dark}
 body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45}
 [hidden]{display:none!important}
+/* view-only owners: controls look the same but can't be used; edit-only buttons are hidden */
+body.ro #ownerApp :is(input,select,textarea,.chip,.bar){pointer-events:none}
+body.ro #ownerApp :is(input,select){opacity:.75}
+body.ro #ownerApp :is(#build,#reset,#add,.editor,#paySave,#payFromSched,#pub,#impApply,[id^="lk"],[id^="x"]){display:none!important}
 a.btn{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 12px;text-decoration:none;font-weight:600}
 .tabs{display:flex;flex-wrap:wrap;gap:6px}
 .tab{font-weight:600}
@@ -208,11 +212,17 @@ pre.sched{margin:0;font-family:var(--mono);font-size:.82rem;white-space:pre-wrap
         <h2>Sch (owner) — can't work</h2>
         <div class="scroll"><table class="ownergrid" id="owner"></table></div>
         <p class="note">Morning = open–12, Afternoon = 12–4 pm, Evening = 4 pm–close. Red = unavailable.</p>
-        <div class="row live" hidden>
-          <input type="email" id="schEmail" placeholder="Sch's Google email" aria-label="Sch's Google email">
-          <span class="note" id="schMsg"></span>
+      </section>
+
+      <section class="panel live" hidden>
+        <h2>Owners &amp; access</h2>
+        <div class="scroll"><table id="access"></table></div>
+        <div class="row" id="accessAdd">
+          <input type="email" id="accEmail" placeholder="Their Google email" aria-label="New person's Google email">
+          <select id="accRole" aria-label="Access"><option value="edit">Can edit</option><option value="view">View only</option></select>
+          <button id="accAddBtn">Add</button>
         </div>
-        <p class="note live" hidden>Sch gets full admin access: signing in with this email opens this whole planner, same as you.</p>
+        <p class="note" id="accMsg">Can edit: everything you can do, except change this list. View only: sees the planner, pay and money pages but can't change anything. Staff go under Team, not here.</p>
       </section>
     </div>
 
@@ -337,7 +347,7 @@ const $=id=>document.getElementById(id);
 function renderSetup(){
   $('cap').value=S.cap;
   $('wk').value=S.week||mondayOf(new Date());
-  $('schEmail').value=S.ownerEmail||'';
+  if(LIVE)renderAccess();
   const sel=(id,cur,hours,label)=>`<select id="${id}" aria-label="${label}"><option value="0">—</option>${hours.map(h=>`<option value="${h}"${cur==h?' selected':''}>${fmt(h)}</option>`).join('')}</select>`;
   const rng=(a,b)=>Array.from({length:b-a+1},(_,k)=>a+k);
   $('comedy').innerHTML=`<tr><th></th>${DAYS.map(d=>`<th>${d}</th>`).join('')}</tr>
@@ -366,7 +376,7 @@ function renderSetup(){
     t.appendChild(d);
     $('n'+i).oninput=ev=>{e.name=ev.target.value||'?';save();hook('onStaff',e,false)};
     if(LIVE)$('em'+i).onchange=ev=>{const v=ev.target.value.trim().toLowerCase();if(v===e.email)return;
-      if(v&&(S.team.some(x=>x!==e&&x.email===v)||v===S.ownerEmail)){ev.target.value=e.email;$('ivm'+i).textContent='Someone else already has that email.';return}
+      if(v&&(S.team.some(x=>x!==e&&x.email===v)||(S.access||[]).some(a=>a.email===v))){ev.target.value=e.email;$('ivm'+i).textContent='Someone else already has that email.';return}
       hook('onStaffRemove',e.email);e.email=v;save();hook('onStaff',e,true);renderSetup()};
     $('l'+i).onchange=ev=>{e.lo=+ev.target.value;if(e.hi<e.lo)e.hi=e.lo;save();renderSetup()};
     $('h'+i).onchange=ev=>{e.hi=+ev.target.value;if(e.lo>e.hi)e.lo=e.hi;save();renderSetup()};
@@ -636,9 +646,30 @@ $('add').onclick=()=>{S.team.push({name:'New person',lo:4,hi:6,max:3,avail:mk([]
 $('reset').onclick=()=>{if(LIVE&&!confirm('Replace your team and settings with the sample? Team emails will be cleared.'))return;
   S.team.forEach(e=>hook('onStaffRemove',e.email));S=SAMPLE();S.team.forEach(fixEmp);LOCKMODE.clear();save();renderSetup();run()};
 $('cap').oninput=e=>{S.cap=+e.target.value||0;save()};
-$('schEmail').onchange=ev=>{const v=ev.target.value.trim().toLowerCase();
-  if(v&&S.team.some(x=>x.email===v)){ev.target.value=S.ownerEmail||'';$('schMsg').textContent='That email is on the team list; use a different one.';return}
-  S.ownerEmail=v;save();hook('onAdmins',v);$('schMsg').textContent=v?'Saved. Sch can now sign in with this email.':'Removed.'};
+// ---- owners & access (live): S.access=[{email,role:'edit'|'view'}]; only the main owner changes it ----
+let ROLE='owner';
+function renderAccess(){
+  if(!S.access)S.access=S.ownerEmail?[{email:S.ownerEmail,role:'edit'}]:[]; // older saves kept one admin email
+  const main=String(window.OWNER_EMAIL||'').toLowerCase(),can=ROLE==='owner';
+  const label=r=>r==='edit'?'Can edit':'View only';
+  $('access').innerHTML=`<tr><th>Email</th><th>Access</th><th></th></tr><tr><td>${esc(main)}</td><td>Main owner</td><td></td></tr>`+
+    S.access.map((a,i)=>`<tr><td>${esc(a.email)}</td><td>${can?`<select id="accR${i}" aria-label="Access for ${esc(a.email)}"><option value="edit"${a.role==='edit'?' selected':''}>Can edit</option><option value="view"${a.role==='view'?' selected':''}>View only</option></select>`:label(a.role)}</td><td>${can?`<button class="x" id="accX${i}" aria-label="Remove ${esc(a.email)}">×</button>`:''}</td></tr>`).join('');
+  $('accessAdd').hidden=!can;
+  if(!can)$('accMsg').textContent='Only the main owner can change who has access.';
+  else S.access.forEach((a,i)=>{
+    $('accR'+i).onchange=ev=>{a.role=ev.target.value;saveAccess(`${a.email} can now ${a.role==='edit'?'edit':'only view'}.`)};
+    $('accX'+i).onclick=()=>{S.access.splice(i,1);saveAccess(`${a.email} no longer has access.`)}});
+}
+function saveAccess(msg){save();hook('onAdmins',S.access);renderAccess();if(msg)$('accMsg').textContent=msg}
+$('accAddBtn').onclick=()=>{const v=$('accEmail').value.trim().toLowerCase();
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)){$('accMsg').textContent='Type their full Google email address.';return}
+  if(v===String(window.OWNER_EMAIL||'').toLowerCase()||S.access.some(a=>a.email===v)){$('accMsg').textContent='That person already has access.';return}
+  if(S.team.some(x=>x.email===v)){$('accMsg').textContent='That email is on the team list; use a different one.';return}
+  S.access.push({email:v,role:$('accRole').value});$('accEmail').value='';
+  saveAccess(`Added ${v}. They sign in at this same link with that Google account.`)};
+// view-only owners: everything visible, nothing changeable (the database refuses writes too)
+function setRole(r){ROLE=r;document.body.classList.toggle('ro',r==='view');renderAccess();
+  if(r==='view')document.querySelector('#ownerApp .sub').textContent='View only: you can look at everything here, but changes are not saved.'}
 $('wk').onchange=e=>{S.week=e.target.value;save();S.team.forEach(x=>hook('onStaff',x,false));run()};
 $('copy').onclick=()=>{navigator.clipboard.writeText($('txt').value).then(()=>{$('copy').textContent='Copied'},()=>{$('txt').select()})};
 // ---- owner: apply reply codes ----
@@ -707,7 +738,7 @@ function startOwner(s,shifts){
   renderSetup();
   if(Array.isArray(shifts)&&shifts.length){const r=build2();r.shifts=shifts;render(r);fillEditor()}else run();
 }
-window.app={S:()=>S,R:()=>R,bits,week:()=>S.week||mondayOf(new Date()),startOwner,mergeStaff,empLive,empSaved,empSchedule};
+window.app={S:()=>S,R:()=>R,bits,week:()=>S.week||mondayOf(new Date()),startOwner,setRole,mergeStaff,empLive,empSaved,empSchedule};
 
 // ---- pay: same math as the salary spreadsheet ----
 const money=v=>'$'+(Math.round((+v||0)*100)/100).toFixed(2);

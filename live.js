@@ -2,7 +2,7 @@
 //
 // Database layout
 //   cafe/state        admins only: whole planner (settings, team, schedule) as JSON strings
-//   cafe/admins       admins only: { emails: [Sch's email] } — extra accounts with full access
+//   cafe/admins       { emails: [can edit], viewers: [view only] }; only the main owner writes it (see access.js)
 //   weeks/<YYYY-MM-DD> admins only: a saved week — schedule text, shifts, pay rows, paid flags
 //   cafe/published    the staff text the owner shared; readable by anyone on the team
 //   staff/<email>     one per employee: name, week, avail, lock (21-char 0/1 strings).
@@ -10,7 +10,9 @@
 if (window.LIVE) {
   const B = 'https://www.gstatic.com/firebasejs/10.12.2/';
   const { initializeApp } = await import(B + 'firebase-app.js');
-  const { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } = await import(B + 'firebase-auth.js');
+  const authMod = await import(B + 'firebase-auth.js');
+  const { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } = authMod;
+  const A = await import('./access.js');
   const { getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, onSnapshot, serverTimestamp } = await import(B + 'firebase-firestore.js');
 
   const fb = initializeApp(window.FIREBASE_CONFIG), auth = getAuth(fb), db = getFirestore(fb);
@@ -35,24 +37,32 @@ if (window.LIVE) {
   let stop = [];
   onAuthStateChanged(auth, async u => {
     stop.forEach(f => f()); stop = [];
-    if (!u) { gateMsg(''); $('signin').hidden = false; all('#gate .signout').forEach(b => b.hidden = true); return; }
+    if (!u) { gateMsg(A.idleMessage()); $('signin').hidden = false; all('#gate .signout').forEach(b => b.hidden = true); return; }
     const mail = (u.email || '').toLowerCase();
     all('.who').forEach(x => x.textContent = mail);
     $('signin').hidden = true; all('#gate .signout').forEach(b => b.hidden = false);
     $('gateMsg').textContent = 'Loading…';
-    // Admins: the main owner, plus Sch's email from cafe/admins. The rules decide;
-    // if this account can read the planner state, it gets the full owner view.
-    let admin = !!OWNER && mail === OWNER;
-    if (!admin) { try { await getDoc(doc(db, 'cafe', 'state')); admin = true; } catch (e) { if (e.code !== 'permission-denied') throw e; } }
-    try { if (admin) await owner(); else await employee(mail); }
-    catch (e) { console.error(e); gateMsg('Could not load (' + (e.code || e.message) + ').'); }
+    try {
+      // owner / edit / view open the full planner (view can't change it); everyone else is staff
+      const role = await A.roleOf({ getDoc, doc }, db, mail, OWNER);
+      if (role === 'staff') return await employee(mail);
+      A.ownerSession(authMod, auth, () => { A.markIdle(); signOut(auth).then(() => location.reload()); });
+      await owner(role);
+    } catch (e) { console.error(e); gateMsg('Could not load (' + (e.code || e.message) + ').'); }
   });
 
-  async function owner() {
+  async function owner(role) {
     const ref = doc(db, 'cafe', 'state'), snap = await getDoc(ref);
     const d = snap.exists() ? snap.data() : {};
     app.startOwner(d.S ? JSON.parse(d.S) : null, d.shifts ? JSON.parse(d.shifts) : null);
+    app.setRole(role);
     show('owner');
+    if (role === 'view') {
+      // look, don't touch: no save hooks, so nothing is written (the rules would refuse it anyway)
+      window.weekStore = { list: async () => (await getDocs(collection(db, 'weeks'))).docs.map(s => s.data()), save: () => Promise.reject(new Error('view only')) };
+      stop.push(onSnapshot(collection(db, 'staff'), qs => { const m = {}; qs.forEach(s => m[s.id] = s.data()); app.mergeStaff(m); }, fail));
+      return;
+    }
 
     let tS = null, tR = null; const tStaff = {};
     const pushState = () => setDoc(ref, { S: JSON.stringify(app.S()) }, { merge: true }).catch(fail);
@@ -75,7 +85,11 @@ if (window.LIVE) {
       list: async () => (await getDocs(collection(db, 'weeks'))).docs.map(s => s.data()),
       save: rec => setDoc(doc(db, 'weeks', rec.week), rec),
     };
-    window.onAdmins = email => setDoc(doc(db, 'cafe', 'admins'), { emails: email ? [email] : [] }).catch(fail);
+    // access list -> cafe/admins (only the main owner may write it)
+    window.onAdmins = list => setDoc(doc(db, 'cafe', 'admins'), {
+      emails: list.filter(a => a.role === 'edit').map(a => a.email),
+      viewers: list.filter(a => a.role === 'view').map(a => a.email),
+    }).catch(fail);
     if (!snap.exists()) { pushState(); pushSched(); }
 
     stop.push(onSnapshot(collection(db, 'staff'), qs => {

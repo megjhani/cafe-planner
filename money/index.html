@@ -12,6 +12,7 @@ window.FIREBASE_CONFIG = {
   projectId: "cafe-planner-e0803",
   appId: "1:371628101359:web:2ccdf1bd2bfdb16991151a"
 };
+window.OWNER_EMAIL = "megjhani@gmail.com"; // main owner, same as the planner
 </script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
@@ -86,6 +87,9 @@ tr.click:hover td{background:var(--bg)}
 .bad{color:var(--warn);font-weight:600}
 .gate{max-width:440px;margin:14vh auto 0;text-align:center;justify-items:center}
 .cat{max-width:210px}
+/* view-only owners: categories can't be changed, statements can't be added or removed */
+body.ro :is(select.cat,input[data-rule]){pointer-events:none;opacity:.75}
+body.ro :is(#uploadPanel,[data-rm]){display:none!important}
 </style>
 </head>
 <body>
@@ -141,6 +145,12 @@ tr.click:hover td{background:var(--bg)}
       <div class="scroll"><table id="plTable"></table></div>
     </section>
     <section class="panel">
+      <h2>Owed to owners</h2>
+      <p class="note" id="ownerSummary" style="font-size:.9rem;color:var(--fg)"></p>
+      <div class="scroll"><table id="ownerTable"></table></div>
+      <p class="note">Money you move in from your own account is a loan (the business pays it back), an investment (it stays in) or, going out, a draw. None of it is revenue or expense. Label each one in Needs review.</p>
+    </section>
+    <section class="panel">
       <h2>Credit card debt</h2>
       <p class="note" id="debtSummary" style="font-size:.9rem;color:var(--fg)"></p>
       <div class="scroll"><table id="debtTable"></table></div>
@@ -177,7 +187,7 @@ tr.click:hover td{background:var(--bg)}
   </section>
 
   <section id="v-statements" class="view" hidden style="display:grid;gap:18px">
-    <section class="panel">
+    <section class="panel" id="uploadPanel">
       <h2>Upload statements</h2>
       <label class="drop" id="drop" for="files">Drop Chase bank or credit card statement PDFs here, or click to choose. You can add several months at once.
         <input type="file" id="files" accept="application/pdf,.pdf" multiple hidden></label>

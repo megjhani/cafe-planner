@@ -1,43 +1,60 @@
 rules_version = '2';
-// Cafe Shift Planner. Main owner: megjhani@gmail.com (also OWNER_EMAIL in index.html).
-// Extra admins (Sch) are listed in cafe/admins and set from the planner.
+// Cafe Shift Planner + money dashboard. Paste into Firebase console > Firestore Database > Rules.
+// Roles (same as access.js):
+//   main owner  megjhani@gmail.com (also OWNER_EMAIL in index.html): everything, and changes access
+//   can edit    cafe/admins.emails: read and write everything except the access list
+//   view only   cafe/admins.viewers: read everything owners see, write nothing
+//   staff       their own staff/<email> record only
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null && request.auth.token.email_verified == true; }
     function me() { return request.auth.token.email.lower(); }
+    function isMain() { return signedIn() && me() == 'megjhani@gmail.com'; }
     function adminsDoc() { return /databases/$(database)/documents/cafe/admins; }
+    function admins() { return get(adminsDoc()).data; }
+    // can edit
     function isOwner() {
-      return signedIn() && (me() == 'megjhani@gmail.com'
-        || (exists(adminsDoc()) && me() in get(adminsDoc()).data.emails));
+      return isMain() || (signedIn() && exists(adminsDoc()) && me() in admins().get('emails', []));
+    }
+    // can look (editors and view-only owners)
+    function canView() {
+      return isOwner() || (signedIn() && exists(adminsDoc()) && me() in admins().get('viewers', []));
     }
 
-    // Planner settings, team list, schedule and the admin list: admins only.
+    // Planner settings, team list and schedule.
     match /cafe/state {
-      allow read, write: if isOwner();
+      allow read: if canView();
+      allow write: if isOwner();
     }
+    // Who has access: everyone with access may read it; only the main owner changes it.
     match /cafe/admins {
-      allow read, write: if isOwner();
+      allow read: if canView();
+      allow write: if isMain();
     }
-    // Saved weeks: schedule, pay and who has been paid. Admins only.
+    // Saved weeks: schedule, pay and who has been paid.
     match /weeks/{week} {
-      allow read, write: if isOwner();
+      allow read: if canView();
+      allow write: if isOwner();
     }
-    // Money dashboard: uploaded bank/card statements and your category choices. Admins only.
+    // Money dashboard: uploaded bank/card statements and category choices.
     match /fin_statements/{id} {
-      allow read, write: if isOwner();
+      allow read: if canView();
+      allow write: if isOwner();
     }
     match /fin/{doc} {
-      allow read, write: if isOwner();
+      allow read: if canView();
+      allow write: if isOwner();
     }
-    // Schedule text an admin shares: anyone on the team list can read it.
+    // Schedule text an owner shares: anyone on the team list can read it.
     match /cafe/published {
-      allow read: if isOwner() || (signedIn() && exists(/databases/$(database)/documents/staff/$(me())));
+      allow read: if canView() || (signedIn() && exists(/databases/$(database)/documents/staff/$(me())));
       allow write: if isOwner();
     }
     // One record per employee, named by their email.
     // They can read only their own and change only their availability.
     match /staff/{email} {
-      allow read, write: if isOwner();
+      allow read: if canView();
+      allow write: if isOwner();
       allow get: if signedIn() && me() == email;
       allow update: if signedIn() && me() == email
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['avail', 'updatedAt'])

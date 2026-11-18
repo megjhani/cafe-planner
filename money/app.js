@@ -5,6 +5,7 @@
 // browser instead (testing / offline); nothing is sent anywhere in that mode.
 import { pdfLines, parseStatement } from './parser.js';
 import { CATEGORIES, GROUPS, GROUP_OF, categorize, bookAmount } from './rules.js';
+import * as A from '../access.js';
 
 const $ = id => document.getElementById(id);
 const esc = t => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
@@ -14,6 +15,7 @@ const mName = (m, long) => new Date(m + '-15T12:00:00').toLocaleDateString(undef
 const dName = d => new Date(d + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 const sum = (a, f) => a.reduce((p, t) => p + f(t), 0);
 
+let RO = false; // view-only owner
 let store = null, STMTS = [], PREFS = { payee: {}, tx: {} }, TX = [], MONTHS = [], PERIOD = null, VIEW = 'overview', CAT = null;
 
 // ---------- storage ----------
@@ -32,7 +34,8 @@ async function start() {
   }
   const B = 'https://www.gstatic.com/firebasejs/10.12.2/';
   const { initializeApp } = await import(B + 'firebase-app.js');
-  const { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } = await import(B + 'firebase-auth.js');
+  const authMod = await import(B + 'firebase-auth.js');
+  const { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } = authMod;
   const { getFirestore, doc, getDoc, getDocs, setDoc, deleteDoc, collection } = await import(B + 'firebase-firestore.js');
   const fb = initializeApp(window.FIREBASE_CONFIG), auth = getAuth(fb), db = getFirestore(fb);
   store = {
@@ -50,12 +53,19 @@ async function start() {
   const out = () => signOut(auth).then(() => location.reload());
   $('signout').onclick = out; $('gateOut').onclick = out;
   onAuthStateChanged(auth, async u => {
-    if (!u) { $('gate').hidden = false; $('app').hidden = true; $('signin').hidden = false; $('gateOut').hidden = true; $('gateMsg').textContent = ''; return; }
-    $('signin').hidden = true; $('gateMsg').textContent = 'Loading…'; $('who').textContent = u.email;
-    try { await load(); }
-    catch (e) {
+    if (!u) { $('gate').hidden = false; $('app').hidden = true; $('signin').hidden = false; $('gateOut').hidden = true; $('gateMsg').textContent = A.idleMessage(); return; }
+    $('signin').hidden = true; $('gateMsg').textContent = 'Loading…';
+    const mail = (u.email || '').toLowerCase();
+    try {
+      const role = await A.roleOf({ getDoc, doc }, db, mail, String(window.OWNER_EMAIL || '').toLowerCase());
+      if (role === 'staff') { $('gateOut').hidden = false; $('gateMsg').textContent = `${mail} isn't an owner. This page is only for the planner's owners.`; return; }
+      A.ownerSession(authMod, auth, () => { A.markIdle(); signOut(auth).then(() => location.reload()); });
+      RO = role === 'view'; document.body.classList.toggle('ro', RO);
+      $('who').textContent = mail + (RO ? ' · view only' : '');
+      await load();
+    } catch (e) {
       $('gateOut').hidden = false;
-      $('gateMsg').textContent = e.code === 'permission-denied' ? `${u.email} isn't an owner. This page is only for the planner's owners.` : 'Could not load (' + (e.code || e.message) + ').';
+      $('gateMsg').textContent = e.code === 'permission-denied' ? `${mail} isn't an owner. This page is only for the planner's owners.` : 'Could not load (' + (e.code || e.message) + ').';
     }
   });
 }
@@ -101,7 +111,8 @@ function totals(ms) {
   r.bankIn = sum(bank.filter(t => t.amount > 0), t => t.amount); r.bankOut = -sum(bank.filter(t => t.amount < 0), t => t.amount);
   r.cardSpent = -sum(card.filter(t => t.amount < 0), t => t.amount);
   r.cardPaid = -sum(bank.filter(t => t.cat === 'Credit card payment'), t => t.amount);
-  r.owner = sum(tx.filter(t => t.cat === 'Owner transfers'), t => t.amount);
+  const own = tx.filter(t => t.group === 'owner' || t.cat === 'Owner money (assign)');
+  r.ownerIn = sum(own.filter(t => t.amount > 0), t => t.amount); r.ownerOut = -sum(own.filter(t => t.amount < 0), t => t.amount);
   r.review = tx.filter(t => t.group === 'review');
   return r;
 }
@@ -155,10 +166,12 @@ function renderOverview() {
     (cb ? row('Still owed', money(cb.v), 'statement balance on ' + dName(cb.on)) : '') +
     `<tr><th>Other</th><th></th></tr>` +
     row('Taxes paid', money(r.tax), 'sales tax and other tax payments') +
-    row('Transfers from your other account', money(r.owner), 'your own money moving in (−) out; not revenue');
+    row('Owner money put in', money(r.ownerIn), 'loans or investment from you; not revenue') +
+    row('Owner money taken out', money(r.ownerOut), 'loan repayments or draws; not an expense');
 
   monthChart();
   cardDebt();
+  ownerMoney();
   const all = MONTHS.map(m => [m, totals([m])]), sel = new Set(ms);
   const cell = v => `<td class="n${v < 0 ? ' neg' : ''}">${money(v)}</td>`;
   $('plTable').innerHTML = `<tr><th>Month</th><th class="n">Revenue</th><th class="n">Cost of goods</th><th class="n">Labor</th><th class="n">Operating</th><th class="n">Profit</th><th class="n">Margin</th><th class="n">Taxes</th></tr>` +
@@ -167,6 +180,19 @@ function renderOverview() {
   $('plTable').querySelectorAll('tr[data-m]').forEach(tr => tr.onclick = () => pick(tr.dataset.m));
 }
 function pick(m) { PERIOD = m; $('period').value = m; render(); }
+
+// Owner money over all statements: loans the business still owes back, money invested, draws taken
+function ownerMoney() {
+  const own = TX.filter(t => t.group === 'owner' || t.cat === 'Owner money (assign)').sort((a, b) => a.date.localeCompare(b.date));
+  const loans = own.filter(t => t.cat === 'Owner loan / repayment'), open = own.filter(t => t.cat === 'Owner money (assign)');
+  const lent = sum(loans.filter(t => t.amount > 0), t => t.amount), repaid = -sum(loans.filter(t => t.amount < 0), t => t.amount);
+  const inv = sum(own.filter(t => t.cat === 'Owner investment'), t => t.amount), draws = -sum(own.filter(t => t.cat === 'Owner draw'), t => t.amount);
+  $('ownerSummary').innerHTML = `The business still owes you <b>${money(lent - repaid, 2)}</b>: you lent ${money(lent, 2)} and it has paid back ${money(repaid, 2)}.` +
+    (inv ? ` Invested (not paid back): ${money(inv, 2)}.` : '') + (draws ? ` Draws taken: ${money(draws, 2)}.` : '') +
+    (open.length ? ` <span class="bad">${open.length} transfer${open.length > 1 ? 's' : ''} with your other account still need${open.length > 1 ? '' : 's'} a label</span> (loan, investment or draw) in Needs review.` : '');
+  $('ownerTable').innerHTML = own.length ? `<tr><th>Date</th><th>What</th><th class="n">In</th><th class="n">Out</th></tr>` +
+    own.map(t => `<tr><td>${dName(t.date)}, ${t.date.slice(0, 4)}</td><td>${esc(t.cat)}<div class="desc">${esc(t.desc)}</div></td><td class="n">${t.amount > 0 ? money(t.amount, 2) : ''}</td><td class="n">${t.amount < 0 ? money(-t.amount, 2) : ''}</td></tr>`).join('') : '<tr><td class="note">No owner money yet.</td></tr>';
+}
 
 // The card started 2026 carrying construction-era debt. Paying the card is never an expense
 // (that would count purchases twice, or count 2025 construction as 2026 costs), so this panel
@@ -265,6 +291,7 @@ function txRows(table, list, opts = {}) {
   });
 }
 async function setCategory(t, cat, allPayee) {
+  if (RO) return;
   if (allPayee) { PREFS.payee[t.payee] = cat; for (const x of TX) if (x.payee === t.payee) delete PREFS.tx[x.id]; }
   else PREFS.tx[t.id] = cat;
   rebuild(); render();
@@ -312,6 +339,7 @@ async function getPdfjs() {
   return pdfjs;
 }
 async function upload(files) {
+  if (RO) return;
   const log = $('uploadLog');
   for (const f of files) {
     const li = document.createElement('p'); li.className = 'note'; li.textContent = `Reading ${f.name}…`; log.prepend(li);
@@ -342,6 +370,7 @@ function renderStatements() {
     list.map(s => `<tr><td>${esc(s.account.name)}</td><td>${dName(s.start)} – ${dName(s.end)}, ${s.end.slice(0, 4)}</td><td class="n">${s.txns.length}</td><td class="ok">✓ match</td><td class="desc">${esc(s.file)}</td><td><button data-rm="${esc(s.key)}">Remove</button></td></tr>`).join('')
     : '<tr><td class="note">No statements saved yet.</td></tr>';
   $('stmtTable').querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
+    if (RO) return;
     const s = STMTS.find(x => x.key === b.dataset.rm);
     if (!confirm(`Remove the ${s.account.name} statement for ${dName(s.start)} – ${dName(s.end)}? Its transactions leave the dashboard. You can upload it again later.`)) return;
     await store.removeStatement(s.key); STMTS = STMTS.filter(x => x.key !== s.key); rebuild(); render();
