@@ -86,8 +86,8 @@ export const isLoan = cat => /loan \/ repayment$/.test(cat);
 const RULES = [
   // transfers first: card payments seen from both sides
   [/Chase Credit Crd|Payment To Chase Card|AUTOMATIC PAYMENT|Payment Thank You/i, 'Credit card payment'],
-  // partners: Murad's personal account (…XXXX) and the partners' own wires in
-  [/Online Transfer From Chk \.\.\.XXXX/i, partnerCat('Murad', 'investment')],
+  // partners: transfers with a partner's own account wait for a label (the ones already
+  // explained are in KNOWN below); the partners' own wires in
   [/Online Transfer (From|To) Chk/i, 'Owner money (assign)'],
   [/B\/O:.*Murad/i, partnerCat('Murad', 'investment')],
   [/B\/O:.*Altaf/i, partnerCat('Altaf', 'investment')],
@@ -140,6 +140,10 @@ const KNOWN = [
   ['2025-10-20', 2000, /ATM Cash Deposit/i, partnerCat('Scherize', 'investment')],
   ['2025-12-10', 6000, /^Deposit \d/, partnerCat('Murad', 'investment')],
   ['2026-02-06', 9500, /^Deposit \d/, partnerCat('Altaf', 'investment')],
+  // transfers in from Murad's personal account
+  ...[['2025-06-23', 100], ['2025-06-23', 3500], ['2025-06-24', 30], ['2025-10-20', 2000], ['2025-11-03', 3500],
+    ['2025-11-04', 3500], ['2025-11-07', 3000], ['2026-01-07', 10000], ['2026-03-16', 480]]
+    .map(([d, a]) => [d, a, /Online Transfer From Chk/i, partnerCat('Murad', 'investment')]),
   // Murad lent the business $2,000 to cover April rent, then took $1,000 back
   ['2026-04-03', 2000, /Online Transfer From Chk/i, partnerCat('Murad', 'loan / repayment')],
   ['2026-04-08', -1000, /Online Transfer To Chk/i, partnerCat('Murad', 'loan / repayment')],
